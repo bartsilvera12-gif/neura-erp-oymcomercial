@@ -10,7 +10,7 @@ import { createServiceRoleClientWithDbSchema } from "@/lib/supabase/empresa-data
 import { createServiceRoleClient } from "@/lib/supabase/service-admin";
 import { quoteSchemaTable } from "@/lib/supabase/chat-pg-pool";
 import { assertAllowedChatDataSchema } from "@/lib/supabase/chat-data-schema";
-import { SUPABASE_APP_SCHEMA } from "@/lib/supabase/schema";
+import { SUPABASE_APP_SCHEMA, IS_SINGLE_CLIENT_INSTANCE } from "@/lib/supabase/schema";
 
 const LOG = "[chat-channel][central_mirror]" as const;
 
@@ -202,6 +202,11 @@ export async function ensureCentralChatChannelMirror(opts: {
   empresaId: string;
   channelId: string;
 }): Promise<void> {
+  // Instancia monocliente: no hay catálogo central `zentra_erp` propio que espejar
+  // (pertenece a la flota, no a esta instancia). No-op defensivo — nunca escribir
+  // en el schema compartido de otro cliente.
+  if (IS_SINGLE_CLIENT_INSTANCE) return;
+
   let tenantSchema: string;
   try {
     tenantSchema = assertAllowedChatDataSchema(opts.tenantDataSchema.trim());

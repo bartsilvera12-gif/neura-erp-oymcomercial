@@ -16,6 +16,21 @@ export const NEURA_CLIENT_SCHEMA: string =
 export const SUPABASE_APP_SCHEMA: string = NEURA_CLIENT_SCHEMA;
 
 /**
+ * Modo de instancia. Default `single_client` (este repo es una instancia dedicada
+ * monocliente; ver NEURA_CLIENT_SCHEMA).
+ */
+export const NEURA_INSTANCE_MODE: string =
+  (typeof process !== "undefined" && process.env.NEURA_INSTANCE_MODE?.trim()) || "single_client";
+
+/**
+ * ¿Instancia monocliente? En `single_client` NO existe un catálogo central
+ * `zentra_erp` propio de esta instancia (ese schema pertenece a la flota central,
+ * no a este cliente). Los mirrors de chat al catálogo central no aplican y deben
+ * ser no-op para no escribir jamás en un schema compartido de otro cliente.
+ */
+export const IS_SINGLE_CLIENT_INSTANCE: boolean = NEURA_INSTANCE_MODE === "single_client";
+
+/**
  * Resolución de schema operativo por empresa.
  * En instancia dedicada monocliente siempre devuelve el schema único; el argumento se ignora.
  * Se mantiene la firma para compatibilidad con callers existentes.
