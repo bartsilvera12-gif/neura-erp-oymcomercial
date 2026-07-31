@@ -793,7 +793,7 @@ export default function CajaPage() {
                 <div className="grid grid-cols-2 gap-3">
                   <label className="block text-sm">
                     <span className="mb-1 block font-medium text-slate-700">
-                      {metodo === "tarjeta" ? "Voucher / últimos 4" : "N° de operación"}
+                      {metodo === "tarjeta" ? "N° de comprobante / últimos 4" : "N° de operación"}
                     </span>
                     <input
                       type="text"
