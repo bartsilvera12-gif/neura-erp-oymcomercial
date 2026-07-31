@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import { useParams, useSearchParams } from "next/navigation";
 import { useAutoClearFlag } from "@/hooks/useAutoClearFlag";
@@ -161,6 +161,10 @@ function UsuarioDetailContent() {
   // alguien de sucursal le cambia por completo qué datos ve.
   const [sucursales, setSucursales] = useState<Array<{ id: string; nombre: string }>>([]);
   const [sucursalId, setSucursalId] = useState("");
+  const sucursalNombre = useMemo(
+    () => sucursales.find((s) => s.id === sucursalId)?.nombre ?? null,
+    [sucursales, sucursalId]
+  );
 
   useEffect(() => {
     if (!id) return;
@@ -566,7 +570,26 @@ function UsuarioDetailContent() {
                   <p className="font-medium text-gray-800">{i.value}</p>
                 </div>
               ))}
+              {/* La sucursal define TODO lo que este usuario ve, así que va acá
+                  y no escondida detrás del botón Editar. Sin ella no puede
+                  operar, y eso tiene que saltar a la vista al abrir la ficha. */}
+              <div>
+                <p className="text-xs text-gray-400">Sucursal</p>
+                {sucursalNombre ? (
+                  <p className="font-medium text-gray-800">{sucursalNombre}</p>
+                ) : (
+                  <p className="font-medium text-amber-700">
+                    Sin asignar — no puede operar
+                  </p>
+                )}
+              </div>
             </div>
+            {!sucursalNombre && (
+              <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Tocá <strong>Editar</strong> y elegí una sucursal. Mientras no tenga una, todas las
+                pantallas le responden que le pida una a un administrador.
+              </p>
+            )}
           </SectionCard>
 
           {usuario.omnicanal && (
