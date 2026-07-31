@@ -22,6 +22,10 @@
 -- El catálogo de usuarios vive en este mismo schema (instancia monocliente), así
 -- que abierta_por / cerrada_por referencian oymcomercial.usuarios y no hay
 -- consulta cross-schema como en el origen.
+--
+-- OJO: esta migración NO otorga privilegios. Los GRANT van en
+-- 20260731160000_caja_grants_y_rls.sql, que hay que aplicar junto con esta o el
+-- módulo falla con "permission denied for table cajas".
 -- ============================================================================
 
 BEGIN;
