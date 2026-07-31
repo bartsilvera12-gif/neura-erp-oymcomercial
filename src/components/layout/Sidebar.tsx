@@ -32,7 +32,6 @@ import {
   ListChecks,
   Percent,
   ChefHat,
-  Utensils,
   BarChart3,
   Banknote,
   ArrowLeftRight,
@@ -121,13 +120,9 @@ const MENU_STRUCTURE: MenuItem[] = [
   },
   { key: "ventas", slug: "ventas", label: "Caja", href: "/ventas", icon: ShoppingCart },
   { key: "presupuestos", slug: "presupuestos", label: "Presupuestos", href: "/presupuestos", icon: FileText },
-  {
-    key: "proyectos",
-    slug: "proyectos",
-    label: "Pedidos",
-    href: "/dashboard/proyectos",
-    icon: Utensils,
-  },
+  // Pedidos (módulo `proyectos`) oculto: O&M Comercial cobra directo en la
+  // caja y no arma pedidos previos para facturar después. Las rutas y los
+  // datos quedan en su lugar; solo se saca del menú.
   { key: "recetas", slug: "recetas", label: "Recetas", href: "/dashboard/recetas", icon: ChefHat },
   { key: "inventario", slug: "inventario", label: "Inventario", href: "/inventario", icon: Package, children: [
     { label: "Productos", href: "/inventario" },

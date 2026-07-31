@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Loader2, Package, Search, Trash2 } from "lucide-react";
 import CajaControlPanel from "@/components/caja/CajaControlPanel";
 import MontoInput, { parseMontoInput } from "@/components/ui/MontoInput";
-import PedidosPendientesCaja from "./PedidosPendientesCaja";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import { saveVenta } from "@/lib/ventas/storage";
 import type { LineaVenta, MetodoPago, TipoIvaVenta } from "@/lib/ventas/types";
@@ -448,8 +447,6 @@ export default function CajaPage() {
       </div>
 
       <CajaControlPanel onStateChange={setCajaAbierta} defaultCollapsed refreshTick={refreshCajaTick} />
-
-      <PedidosPendientesCaja />
 
       {ventaOk && (
         <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800 shadow-sm">

@@ -4,6 +4,19 @@ import { NextResponse } from "next/server";
 import { getServiceAuthUsuario } from "@/lib/auth/get-service-auth-usuario";
 import { esRolAdminEmpresa } from "@/lib/modulos/resolve-effective-modules";
 
+/**
+ * Tope de usuarios ACTIVOS de la instancia.
+ *
+ * Se controla en el servidor y no con la política `max_usuarios_por_empresa`
+ * de Configuración: esa vive en el localStorage del navegador (ver
+ * `@/lib/config/storage`), así que cualquiera la cambia desde su propia
+ * máquina. Un límite que se puede editar del lado del cliente no es un límite.
+ *
+ * Override por entorno para no tener que tocar código si el cliente contrata
+ * más puestos.
+ */
+export const MAX_USUARIOS_ACTIVOS = Number(process.env.NEURA_MAX_USUARIOS ?? 4) || 4;
+
 function emailExistsInAuthError(msg: string): boolean {
   const m = msg.toLowerCase();
   return (
@@ -112,6 +125,38 @@ export async function POST(req: Request) {
     const sucursalId = body.sucursal_id ? String(body.sucursal_id) : "";
     if (!sucursalId) {
       return NextResponse.json({ error: "Seleccioná la sucursal del usuario." }, { status: 400 });
+    }
+
+    // Tope de usuarios activos de la instancia. Se cuenta acá, antes de tocar
+    // Auth: si se validara después de crear el usuario en Supabase Auth
+    // quedaría una cuenta huérfana sin fila en `usuarios`.
+    //
+    // Los inactivos no ocupan lugar: dar de baja a alguien libera un puesto.
+    // Reactivar a un inactivo cuando el cupo está lleno se sigue permitiendo
+    // desde la ficha del usuario — este control es solo para altas nuevas.
+    const { count: activos, error: errCount } = await supabase
+      .from("usuarios")
+      .select("id", { count: "exact", head: true })
+      .eq("empresa_id", empresaId)
+      .eq("estado", "activo");
+    if (errCount) {
+      return NextResponse.json({ error: errCount.message }, { status: 400 });
+    }
+    // Un alta sobre un email ya existente reactiva esa fila en vez de sumar
+    // una nueva, así que no consume cupo.
+    const { data: yaExiste } = await supabase
+      .from("usuarios")
+      .select("id")
+      .eq("email", email)
+      .eq("empresa_id", empresaId)
+      .maybeSingle();
+    if (!yaExiste && (activos ?? 0) >= MAX_USUARIOS_ACTIVOS) {
+      return NextResponse.json(
+        {
+          error: `Llegaste al máximo de ${MAX_USUARIOS_ACTIVOS} usuarios activos. Para dar de alta a alguien más, desactivá primero a otro usuario desde Usuarios.`,
+        },
+        { status: 409 }
+      );
     }
     const { data: sucOk } = await supabase
       .from("sucursales")
