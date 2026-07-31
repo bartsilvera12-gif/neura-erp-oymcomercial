@@ -338,10 +338,32 @@ export async function commitProductos(
     }
   }
 
-  // Procesar productos en chunks
-  for (const chunk of chunked(parsed, 200)) {
-    for (const p of chunk) {
-      if (p.errors.length > 0) { out.errors++; out.errorMessages.push(`Fila ${p.row_number}: ${p.errors.join("; ")}`); continue; }
+  /**
+   * Las filas se escriben en tandas CONCURRENTES.
+   *
+   * Antes esto era un for anidado con `await` por fila: los "chunks" de 200 no
+   * hacían nada, la ejecución seguía siendo estrictamente secuencial. Cada fila
+   * cuesta 2 o 3 viajes a la base (secuencia, insert, movimiento), así que un
+   * catálogo de 1.149 productos son más de 2.500 consultas en fila india. Con
+   * la latencia de Supabase eso pasa los dos minutos y el proxy corta la
+   * request: el navegador recibe la página de error en HTML y el importador
+   * muere con "Unexpected token '<'" después de haber escrito una parte.
+   *
+   * El tamaño de tanda acompaña al pool (PG_POOL_MAX, 10 por defecto): más
+   * concurrencia que conexiones solo agrega cola.
+   *
+   * Es seguro en paralelo: los contadores de `out` se tocan entre awaits, y
+   * Node no ejecuta dos de esos tramos a la vez; el código de barras interno
+   * sale de `incrementar_secuencia_producto`, que es un upsert atómico con
+   * ON CONFLICT ... RETURNING, no un SELECT MAX.
+   *
+   * Efecto visible: los mensajes de error dejan de salir ordenados por fila.
+   * Cada uno dice a qué fila pertenece, así que se ordenan al final.
+   */
+  const CONCURRENCIA = 10;
+  for (const chunk of chunked(parsed, CONCURRENCIA)) {
+    await Promise.all(chunk.map(async (p) => {
+      if (p.errors.length > 0) { out.errors++; out.errorMessages.push(`Fila ${p.row_number}: ${p.errors.join("; ")}`); return; }
       const categoriaId = p.categoria_nombre ? maps.categoriasByName.get(p.categoria_nombre) ?? null : null;
       const proveedorId = p.proveedor_nombre ? maps.proveedoresByName.get(p.proveedor_nombre) ?? null : null;
       const ubicacionId = p.ubicacion_nombre
@@ -429,8 +451,19 @@ export async function commitProductos(
           out.errorMessages.push(`Fila ${p.row_number}: ${msg.slice(0, 200)}`);
         }
       }
-    }
+    }));
   }
+
+  // Con las tandas concurrentes los mensajes llegan en el orden en que
+  // respondió la base, no en el del archivo. Se reordenan por número de fila
+  // para que el reporte de errores se pueda seguir contra el Excel.
+  const porFila = (a: string, b: string) => {
+    const n = (s: string) => Number(/^Fila (\d+):/.exec(s)?.[1] ?? Number.MAX_SAFE_INTEGER);
+    return n(a) - n(b);
+  };
+  out.errorMessages.sort(porFila);
+  out.warningMessages.sort(porFila);
+
   return out;
 }
 

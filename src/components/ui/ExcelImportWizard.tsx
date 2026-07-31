@@ -26,14 +26,38 @@ export default function ExcelImportWizard({
   const [commit, setCommit] = useState<CommitResponse | null>(null);
   const [crearFaltantes, setCrearFaltantes] = useState(false);
 
+  /**
+   * Lee la respuesta tolerando que NO sea JSON.
+   *
+   * Cuando el import tarda de más, el que responde es el proxy y no la app: la
+   * respuesta es una página de error en HTML y `r.json()` explotaba con
+   * "Unexpected token '<', "<!DOCTYPE"...", que no le dice nada a nadie.
+   */
+  async function leerRespuesta(r: Response): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+    const texto = await r.text();
+    try {
+      const j = JSON.parse(texto) as { success?: boolean; data?: unknown; error?: string };
+      if (!r.ok || !j?.success) return { ok: false, error: j?.error ?? `Error ${r.status}` };
+      return { ok: true, data: j.data };
+    } catch {
+      return {
+        ok: false,
+        error:
+          r.status === 504 || r.status === 502 || r.status === 0
+            ? "El servidor tardó demasiado y cortó la operación. Puede que parte del archivo se haya importado: volvé a subirlo y mirá la previsualización, las filas ya cargadas van a figurar como ACTUALIZAR."
+            : `El servidor respondió algo inesperado (HTTP ${r.status}). Revisá los logs del deploy.`,
+      };
+    }
+  }
+
   async function handleUpload() {
     if (!file) return;
     setBusy(true); setError(null);
     try {
       const fd = new FormData(); fd.append("file", file);
       const r = await fetch(previewUrl, { method: "POST", credentials: "include", body: fd });
-      const j = await r.json();
-      if (!r.ok || !j?.success) { setError(j?.error ?? `Error ${r.status}`); return; }
+      const j = await leerRespuesta(r);
+      if (!j.ok) { setError(j.error ?? `Error ${r.status}`); return; }
       setPreview(j.data as PreviewResponse);
       setStep("preview");
     } catch (e) {
@@ -49,8 +73,8 @@ export default function ExcelImportWizard({
       fd.append("file", file);
       if (permiteCrearFaltantes) fd.append("crear_faltantes", crearFaltantes ? "1" : "0");
       const r = await fetch(commitUrl, { method: "POST", credentials: "include", body: fd });
-      const j = await r.json();
-      if (!r.ok || !j?.success) { setError(j?.error ?? `Error ${r.status}`); return; }
+      const j = await leerRespuesta(r);
+      if (!j.ok) { setError(j.error ?? `Error ${r.status}`); return; }
       setCommit(j.data as CommitResponse);
       setStep("done");
       onCompleted?.();
