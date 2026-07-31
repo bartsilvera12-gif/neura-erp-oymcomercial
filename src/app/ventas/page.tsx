@@ -631,9 +631,16 @@ export default function CajaPage() {
 
           {/* PANEL DERECHO: producto destacado + totales */}
           <div className="flex flex-col rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className="relative min-h-[280px] flex-1 overflow-hidden rounded-t-2xl bg-gradient-to-br from-slate-100 to-slate-200">
+            {/* Fondo de marca. El logo va como background y no como <img> para
+                que el recorte quede en el contenedor y la foto del producto se
+                superponga sin pelear por el espacio. Se atenúa cuando hay un
+                producto cargado: ahí el protagonista es la mercadería. */}
+            <div
+              className="relative min-h-[280px] flex-1 overflow-hidden rounded-t-2xl bg-black bg-contain bg-center bg-no-repeat transition-[background-size]"
+              style={{ backgroundImage: "url('/logo.jpeg')" }}
+            >
               {ultimoAgregado ? (
-                <div className="relative z-10 flex h-full items-center justify-center p-6">
+                <div className="relative z-10 flex h-full items-center justify-center bg-black/60 p-6">
                   <div className="rounded-2xl border-2 border-white/20 bg-white/95 p-3 shadow-2xl">
                     {ultimoAgregado.imagen_url ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -654,9 +661,10 @@ export default function CajaPage() {
                   </div>
                 </div>
               ) : (
-                <div className="flex h-full flex-col items-center justify-center gap-2 text-slate-400">
-                  <Package className="h-12 w-12 text-slate-300" />
-                  <p className="text-xs">El último producto cargado se muestra acá.</p>
+                <div className="absolute inset-x-0 bottom-0 p-4 text-center">
+                  <p className="text-[11px] text-white/50">
+                    El último producto cargado se muestra acá.
+                  </p>
                 </div>
               )}
             </div>
