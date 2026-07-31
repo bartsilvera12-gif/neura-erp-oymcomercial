@@ -2,7 +2,7 @@
 
 import PageHeader from "@/components/ui/PageHeader";
 import { ReportCard } from "@/components/reportes/ReportCard";
-import { Wallet, Truck, Package, ShoppingCart, ArrowLeftRight } from "lucide-react";
+import { Wallet, Truck, Package, ShoppingCart, ArrowLeftRight, Building2 } from "lucide-react";
 
 /** Hub de reportería operativa (Fase 1: Estado de cuenta + Proveedores). */
 export default function ReportesPage() {
@@ -15,6 +15,15 @@ export default function ReportesPage() {
       />
 
       <ul className="m-0 grid list-none gap-4 p-0 sm:grid-cols-2 xl:grid-cols-3">
+        <li>
+          <ReportCard
+            title="Consolidado por sucursal"
+            subtitle="Comparativa entre locales · solo admin"
+            icon={Building2}
+            description="Ventas, compras, gastos, resultado, stock valorizado y diferencias de caja de cada sucursal, lado a lado. Es la única pantalla que cruza sucursales."
+            href="/reportes/consolidado"
+          />
+        </li>
         <li>
           <ReportCard
             title="Estado de cuenta"
