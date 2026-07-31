@@ -13,6 +13,7 @@ import {
   PieChart,
   Receipt,
   SlidersHorizontal,
+  Store,
   UsersRound,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -78,6 +79,16 @@ export default function ConfiguracionPage() {
           </p>
         </div>
         <ul className="m-0 grid list-none gap-4 p-0 sm:grid-cols-2 xl:grid-cols-3">
+          <li>
+            <SettingsModuleCard
+              title="Sucursales"
+              subtitle="GLOBAL · OPERACIÓN"
+              description="Locales donde opera la empresa. Cada usuario ve solo la suya: ventas, stock, caja y facturación quedan separados. Incluye establecimiento y punto de expedición SIFEN."
+              icon={Store}
+              badge={{ label: "Admin", tone: "neutral" as const }}
+              href="/configuracion/sucursales"
+            />
+          </li>
           <li>
             <SettingsModuleCard
               title="Facturación"
