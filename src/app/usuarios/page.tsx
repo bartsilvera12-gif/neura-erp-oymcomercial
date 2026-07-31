@@ -29,6 +29,8 @@ function getInitials(nombre: string) {
 
 export default function UsuariosPage() {
   const [usuarios, setUsuarios] = useState<UsuarioRow[]>([]);
+  const [activos, setActivos] = useState(0);
+  const [maxActivos, setMaxActivos] = useState<number | null>(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busqueda, setBusqueda] = useState("");
@@ -39,10 +41,14 @@ export default function UsuariosPage() {
       .then((data) => {
         if (data.error) throw new Error(data.error);
         setUsuarios(data.usuarios ?? []);
+        setActivos(typeof data.activos === "number" ? data.activos : 0);
+        setMaxActivos(typeof data.maxActivos === "number" ? data.maxActivos : null);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Error"))
       .finally(() => setCargando(false));
   }, []);
+
+  const cupoLleno = maxActivos != null && activos >= maxActivos;
 
   const filtrados = usuarios.filter((u) => {
     const q = busqueda.toLowerCase();
@@ -73,12 +79,49 @@ export default function UsuariosPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Usuarios</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Usuarios de tu empresa</p>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold text-gray-900">Usuarios</h1>
+            {maxActivos != null && (
+              <span
+                className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                  cupoLleno
+                    ? "bg-rose-50 text-rose-700 border border-rose-200"
+                    : "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                }`}
+                title="El tope incluye a todos los usuarios activos, también al que estás usando ahora."
+              >
+                {activos}/{maxActivos} activos
+              </span>
+            )}
+          </div>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Usuarios de tu empresa
+            {maxActivos != null && (
+              <>
+                {" · "}
+                <span className="text-gray-600">
+                  máx. {maxActivos} activos (te incluye)
+                </span>
+              </>
+            )}
+          </p>
         </div>
         <Link
           href="/usuarios/nuevo"
-          className="inline-flex items-center gap-2 bg-[#0EA5E9] hover:bg-[#0284C7] text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors shadow-sm active:scale-95"
+          aria-disabled={cupoLleno}
+          onClick={(e) => {
+            if (cupoLleno) {
+              e.preventDefault();
+              alert(
+                `Llegaste al máximo de ${maxActivos} usuarios activos (te incluye). Desactivá primero a otro usuario para dar de alta a alguien más.`
+              );
+            }
+          }}
+          className={`inline-flex items-center gap-2 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors shadow-sm active:scale-95 ${
+            cupoLleno
+              ? "bg-slate-300 cursor-not-allowed hover:bg-slate-300 active:scale-100"
+              : "bg-[#0EA5E9] hover:bg-[#0284C7]"
+          }`}
         >
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
             <path d="M10.75 4.75a.75.75 0 0 0-1.5 0v4.5h-4.5a.75.75 0 0 0 0 1.5h4.5v4.5a.75.75 0 0 0 1.5 0v-4.5h4.5a.75.75 0 0 0 0-1.5h-4.5v-4.5Z" />

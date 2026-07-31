@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getServiceAuthUsuario } from "@/lib/auth/get-service-auth-usuario";
+import { MAX_USUARIOS_ACTIVOS } from "@/lib/usuarios/limits";
 
 /** Lista usuarios de la empresa del usuario autenticado (para /usuarios) */
 export async function GET(request: Request) {
@@ -33,7 +34,17 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
 
-    return NextResponse.json({ usuarios: usuarios ?? [] });
+    // Conteo de activos + tope: el frontend lo usa para mostrar "X/N activos".
+    // Se cuenta acá con los mismos criterios que el guard de alta (POST /nuevo)
+    // para que el chip refleje exactamente lo que va a validar el server: el
+    // admin logueado también cuenta.
+    const activos = (usuarios ?? []).filter((u) => (u.estado ?? "") === "activo").length;
+
+    return NextResponse.json({
+      usuarios: usuarios ?? [],
+      activos,
+      maxActivos: MAX_USUARIOS_ACTIVOS,
+    });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Error";
     return NextResponse.json({ error: msg }, { status: 500 });

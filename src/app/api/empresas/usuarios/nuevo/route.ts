@@ -3,19 +3,17 @@ import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { getServiceAuthUsuario } from "@/lib/auth/get-service-auth-usuario";
 import { esRolAdminEmpresa } from "@/lib/modulos/resolve-effective-modules";
+import { MAX_USUARIOS_ACTIVOS } from "@/lib/usuarios/limits";
 
 /**
- * Tope de usuarios ACTIVOS de la instancia.
+ * Tope de usuarios ACTIVOS de la instancia (ver @/lib/usuarios/limits).
  *
  * Se controla en el servidor y no con la política `max_usuarios_por_empresa`
  * de Configuración: esa vive en el localStorage del navegador (ver
  * `@/lib/config/storage`), así que cualquiera la cambia desde su propia
  * máquina. Un límite que se puede editar del lado del cliente no es un límite.
- *
- * Override por entorno para no tener que tocar código si el cliente contrata
- * más puestos.
  */
-export const MAX_USUARIOS_ACTIVOS = Number(process.env.NEURA_MAX_USUARIOS ?? 4) || 4;
+export { MAX_USUARIOS_ACTIVOS };
 
 function emailExistsInAuthError(msg: string): boolean {
   const m = msg.toLowerCase();
