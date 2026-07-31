@@ -142,6 +142,10 @@ export function pathRequiresModuleSlug(pathname: string): string | null {
   if (p.startsWith("/inventario")) return "inventario";
   if (p.startsWith("/clientes")) return "clientes";
   if (p.startsWith("/proveedores")) return "compras";
+  // Antes de /pagos a propósito: "pagos-proveedores" empieza con "/pagos" y
+  // caería en el módulo `pagos` (cobros a clientes), que esta instancia no usa.
+  // La deuda con proveedores es parte de Compras.
+  if (p.startsWith("/pagos-proveedores")) return "compras";
   if (p.startsWith("/compras")) return "compras";
   if (p.startsWith("/gastos")) return "gastos";
   if (p.startsWith("/reportes")) return "reportes";
