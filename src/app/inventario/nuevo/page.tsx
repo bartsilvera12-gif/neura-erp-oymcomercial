@@ -61,28 +61,15 @@ export default function NuevoProductoPage() {
   const [esVendible, setEsVendible] = useState(true);
   const [esInsumo, setEsInsumo] = useState(false);
 
-  // Selector inicial de tipo gastronómico — aplica presets a los flags
-  type TipoGastro = "reventa" | "menu" | "materia" | null;
-  const [tipoGastro, setTipoGastro] = useState<TipoGastro>(null);
-  function aplicarTipoGastro(tipo: Exclude<TipoGastro, null>) {
-    setTipoGastro(tipo);
-    if (tipo === "reventa") {
-      setEsVendible(true);
-      setEsInsumo(false);
-      setControlaStock(true);
-      setForm((prev) => ({ ...prev, unidad_medida: prev.unidad_medida || "UNIDAD" }));
-    } else if (tipo === "menu") {
-      setEsVendible(true);
-      setEsInsumo(false);
-      setControlaStock(false);
-      setForm((prev) => ({ ...prev, unidad_medida: prev.unidad_medida || "UNIDAD" }));
-    } else {
-      setEsVendible(false);
-      setEsInsumo(true);
-      setControlaStock(false);
-      setForm((prev) => ({ ...prev, unidad_medida: prev.unidad_medida || "G" }));
-    }
-  }
+  /**
+   * O&M Comercial maneja un solo tipo de producto: se compra y se vende tal
+   * cual, controlando stock. El origen del código pedía elegir entre reventa,
+   * menú y materia prima antes de mostrar el formulario; acá ese paso no existe
+   * y el tipo queda fijo. Se conserva la constante porque el resto del
+   * formulario decide con ella qué campos mostrar.
+   */
+  type TipoGastro = "reventa" | "menu" | "materia";
+  const tipoGastro: TipoGastro = "reventa";
 
   // Configuración gastronómica
   const [controlaStock, setControlaStock] = useState(true);
@@ -396,73 +383,9 @@ export default function NuevoProductoPage() {
     "w-full border border-slate-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-[#0EA5E9] focus:outline-none bg-white text-sm";
   const labelClass = "block text-sm font-medium text-slate-700 mb-2";
 
-  // Paso 0: selector inicial de tipo de producto
-  if (tipoGastro === null) {
-    return (
-      <div className="space-y-8">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-800">Nuevo producto</h1>
-          <p className="text-gray-600">¿Qué tipo de producto vas a cargar?</p>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-5xl">
-          {([
-            {
-              tipo: "reventa" as const,
-              titulo: "Producto de reventa",
-              Icon: ShoppingBag,
-              iconColor: "text-sky-600",
-              ejemplo: "Gaseosas, agua, jugos, postres comprados",
-              descripcion: "Se compra y se vende tal cual. Controla stock y descuenta al vender.",
-              acento: "border-sky-300 bg-sky-50/40 hover:border-sky-500",
-            },
-            {
-              tipo: "menu" as const,
-              titulo: "Producto del menú",
-              Icon: ClipboardList,
-              iconColor: "text-amber-600",
-              ejemplo: "Pizzas, lomitos, hamburguesas, combos",
-              descripcion: "Producto preparado por el local. No descuenta stock directo (usá receta para costeo).",
-              acento: "border-amber-300 bg-amber-50/40 hover:border-amber-500",
-            },
-            {
-              tipo: "materia" as const,
-              titulo: "Materia prima / insumo",
-              Icon: Boxes,
-              iconColor: "text-emerald-600",
-              ejemplo: "Harina, queso, salsa, carne, envases",
-              descripcion: "Insumo para recetas. Sólo se usa para costear productos del menú.",
-              acento: "border-emerald-300 bg-emerald-50/40 hover:border-emerald-500",
-            },
-          ]).map((opt) => (
-            <button
-              key={opt.tipo}
-              type="button"
-              onClick={() => aplicarTipoGastro(opt.tipo)}
-              className={`text-left rounded-xl border-2 ${opt.acento} p-5 transition-all hover:shadow-md`}
-            >
-              <opt.Icon className={`w-7 h-7 mb-2 ${opt.iconColor}`} />
-              <div className="text-base font-semibold text-slate-900">{opt.titulo}</div>
-              <div className="mt-1 text-xs italic text-slate-500">Ej: {opt.ejemplo}</div>
-              <div className="mt-3 text-sm text-slate-700">{opt.descripcion}</div>
-            </button>
-          ))}
-        </div>
-        <div>
-          <button
-            type="button"
-            onClick={() => router.push("/inventario")}
-            className="text-sm text-gray-500 hover:text-gray-700"
-          >
-            ← Cancelar
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   const summary = TIPO_SUMMARY[tipoGastro];
-  const showStock = tipoGastro === "reventa";
-  const showPrecioVenta = tipoGastro !== "materia";
+  const showStock = true;
+  const showPrecioVenta = true;
 
   return (
     <div className="space-y-8">
@@ -478,13 +401,6 @@ export default function NuevoProductoPage() {
             <div className="text-base font-semibold text-slate-900">{summary.titulo}</div>
             <div className="text-sm text-slate-600 mt-0.5">{summary.descripcion}</div>
           </div>
-          <button
-            type="button"
-            onClick={() => setTipoGastro(null)}
-            className="text-xs text-amber-700 hover:text-amber-900 underline shrink-0"
-          >
-            Cambiar tipo
-          </button>
         </div>
       </div>
 
@@ -535,18 +451,13 @@ export default function NuevoProductoPage() {
           <div>
             <label className={labelClass}>
               Descripción
-              {tipoGastro === "menu" && <span className="text-xs font-normal text-amber-700 ml-2">(visible al cliente)</span>}
             </label>
             <textarea
               name="descripcion"
               value={form.descripcion}
               onChange={handleChange}
-              placeholder={
-                tipoGastro === "menu"
-                  ? "Ej: Pan, carne, huevo, doble queso, lechuga, tomate, mayonesa."
-                  : "Descripción opcional del producto"
-              }
-              rows={tipoGastro === "menu" ? 3 : 2}
+              placeholder="Descripción opcional del producto"
+              rows={2}
               className={inputClass}
             />
           </div>
@@ -591,14 +502,14 @@ export default function NuevoProductoPage() {
               </div>
             </div>
 
-            <div className={tipoGastro === "menu" ? "hidden" : ""}>
+            <div>
               <label className={labelClass}>Unidad de medida</label>
               <select
                 name="unidad_medida"
                 value={form.unidad_medida}
                 onChange={handleChange}
                 className={`${inputClass} uppercase`}
-                required={tipoGastro !== "menu"}
+                required
               >
                 {UNIDADES_OPCIONES.map((u) => (
                   <option key={u} value={u}>{u}</option>
@@ -833,8 +744,8 @@ export default function NuevoProductoPage() {
                 </div>
               </div>
 
-              {/* Proveedor — 4 cols. Oculto para Menú (productos preparados no tienen proveedor). */}
-              <div className={`md:col-span-4 min-w-0 ${tipoGastro === "menu" ? "hidden" : ""}`}>
+              {/* Proveedor — 4 cols. */}
+              <div className="md:col-span-4 min-w-0">
                 <label className={labelClass}>Proveedor principal</label>
                 <SelectFromList
                   value={proveedorId}

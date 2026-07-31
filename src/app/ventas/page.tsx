@@ -1,933 +1,949 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { Fragment, useEffect, useState } from "react";
-import { AlertTriangle, RotateCw, X } from "lucide-react";
-import EdgeScrollArea from "@/components/ui/EdgeScrollArea";
-import { FancySelect } from "@/components/ui/FancySelect";
-import MobileFab from "@/components/ui/MobileFab";
-import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
-import { getVentas } from "@/lib/ventas/storage";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CheckCircle2, Loader2, Package, Search, Trash2 } from "lucide-react";
 import CajaControlPanel from "@/components/caja/CajaControlPanel";
+import MontoInput, { parseMontoInput } from "@/components/ui/MontoInput";
 import PedidosPendientesCaja from "./PedidosPendientesCaja";
-import AnularVentaModal from "./AnularVentaModal";
-import { esMismoDiaAsuncion } from "@/lib/fecha/asuncion";
-import type { Venta, TipoVenta, TipoIvaVenta } from "@/lib/ventas/types";
+import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
+import { saveVenta } from "@/lib/ventas/storage";
+import type { LineaVenta, MetodoPago, TipoIvaVenta } from "@/lib/ventas/types";
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+type EntidadBancaria = { id: string; codigo: string | null; nombre: string; tipo: string | null };
 
-function formatGs(valor: number) {
-  return `Gs. ${Math.round(valor).toLocaleString("es-PY")}`;
-}
+// ── Tipos POS ───────────────────────────────────────────────────────────────
 
-function formatFecha(iso: string) {
-  try {
-    const d    = new Date(iso);
-    const dd   = String(d.getDate()).padStart(2, "0");
-    const mm   = String(d.getMonth() + 1).padStart(2, "0");
-    const yyyy = d.getFullYear();
-    const hh   = String(d.getHours()).padStart(2, "0");
-    const min  = String(d.getMinutes()).padStart(2, "0");
-    return `${dd}/${mm}/${yyyy} ${hh}:${min}`;
-  } catch {
-    return iso;
-  }
-}
-
-// ── Constantes de estilo ───────────────────────────────────────────────────────
-
-const inputFilterClass =
-  "border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-[#0EA5E9] focus:outline-none";
-
-const tipoVentaBadge: Record<TipoVenta, string> = {
-  CONTADO: "bg-blue-50 text-blue-700",
-  CREDITO: "bg-orange-50 text-orange-700",
+type ProductoHit = {
+  id: string;
+  nombre: string;
+  sku: string;
+  codigo_barras: string | null;
+  precio_venta: number;
+  precio_mayorista: number;
+  cantidad_minima_mayorista: number | null;
+  stock_actual: number;
+  imagen_url: string | null;
+  tipo_iva: TipoIvaVenta;
 };
 
-const ivaLabel: Record<TipoIvaVenta, string> = {
-  EXENTA: "Exenta",
-  "5%":   "IVA 5%",
-  "10%":  "IVA 10%",
+type CartItem = {
+  producto_id: string;
+  producto_nombre: string;
+  sku: string;
+  imagen_url: string | null;
+  stock_actual: number;
+  cantidad: number;
+  precio_venta: number;         // precio unitario minorista base
+  precio_mayorista: number;     // precio unitario mayorista (0 si no aplica)
+  cantidad_minima_mayorista: number | null;
+  tipo_iva: TipoIvaVenta;
 };
 
-// ── Métricas del día ──────────────────────────────────────────────────────────
+/** Mapea la fila que devuelve /api/productos/search a un hit del POS. */
+function toHit(p: Record<string, unknown>): ProductoHit {
+  const iva = p.tipo_iva;
+  return {
+    id: String(p.id),
+    nombre: String(p.nombre ?? ""),
+    sku: String(p.sku ?? ""),
+    codigo_barras: (p.codigo_barras as string | null) ?? null,
+    precio_venta: Number(p.precio_venta) || 0,
+    precio_mayorista: Number(p.precio_mayorista) || 0,
+    cantidad_minima_mayorista:
+      p.cantidad_minima_mayorista != null ? Number(p.cantidad_minima_mayorista) : null,
+    stock_actual: Number(p.stock_actual) || 0,
+    imagen_url: (p.imagen_url as string | null) ?? null,
+    tipo_iva: (iva === "EXENTA" || iva === "5%" ? iva : "10%") as TipoIvaVenta,
+  };
+}
 
-function esDeHoy(iso: string): boolean {
-  // Compara por día calendario de Paraguay (America/Asuncion), no por el TZ del
-  // runtime: una venta hecha de noche PY se guarda con fecha UTC del día siguiente
-  // y con `getDate()` local se contaría/descartaría mal.
-  try {
-    return esMismoDiaAsuncion(iso);
-  } catch {
-    return false;
+/** Precio unitario efectivo según la cantidad y el umbral mayorista del producto. */
+function precioEfectivo(
+  it: Pick<CartItem, "cantidad" | "precio_venta" | "precio_mayorista" | "cantidad_minima_mayorista">
+): number {
+  if (
+    it.precio_mayorista > 0 &&
+    it.cantidad_minima_mayorista != null &&
+    it.cantidad_minima_mayorista > 0 &&
+    it.cantidad >= it.cantidad_minima_mayorista
+  ) {
+    return it.precio_mayorista;
   }
+  return it.precio_venta;
 }
 
-interface MetricasHoy {
-  facturacion:       number;
-  cantidadVentas:    number;
-  ticketPromedio:    number;
-  productosVendidos: number;  // suma de todas las cantidades en todos los ítems
-}
-
-function calcularMetricas(ventas: Venta[]): MetricasHoy {
-  // Excluir anuladas del resumen "Facturación de hoy" / órdenes / productos vendidos.
-  const deHoy            = ventas.filter((v) => esDeHoy(v.fecha) && v.estado !== "anulada");
-  const facturacion      = deHoy.reduce((s, v) => s + v.total, 0);
-  const cantidadVentas   = deHoy.length;
-  const ticketPromedio   = cantidadVentas > 0 ? facturacion / cantidadVentas : 0;
-  const productosVendidos = deHoy.reduce(
-    (s, v) => s + v.items.reduce((si, i) => si + i.cantidad, 0),
-    0
-  );
-  return { facturacion, cantidadVentas, ticketPromedio, productosVendidos };
-}
-
-// ── Tarjeta métrica ───────────────────────────────────────────────────────────
-
-function MetricCard({
-  label, value, sub, accent,
-}: {
-  label: string; value: string; sub?: string; accent?: boolean;
-}) {
+function esMayoristaAplicado(
+  it: Pick<CartItem, "cantidad" | "precio_venta" | "precio_mayorista" | "cantidad_minima_mayorista">
+): boolean {
   return (
-    <div className={`rounded-2xl border px-5 py-4 flex flex-col gap-1 shadow-sm ${
-      accent
-        ? "bg-[#4FAEB2] border-[#4FAEB2] ring-1 ring-[#4FAEB2]/25"
-        : "bg-white border-[#4FAEB2]/30 ring-1 ring-[#4FAEB2]/10"
-    }`}>
-      <span className={`text-[10px] font-semibold uppercase tracking-[0.14em] ${
-        accent ? "text-white/90" : "text-[#4FAEB2]"
-      }`}>
-        {label}
-      </span>
-      <span className={`text-2xl font-bold tabular-nums leading-tight ${
-        accent ? "text-white" : "text-[#3F8E91]"
-      }`}>
-        {value}
-      </span>
-      {sub && <span className={`text-xs ${accent ? "text-white/80" : "text-slate-500"}`}>{sub}</span>}
-    </div>
+    precioEfectivo(it) === it.precio_mayorista &&
+    it.precio_mayorista > 0 &&
+    it.precio_mayorista !== it.precio_venta
   );
 }
 
-// ── Helpers de fila ───────────────────────────────────────────────────────────
-
-/** Muestra el primer producto de la venta y un badge con el resto. */
-function ResumenProductos({ v }: { v: Venta }) {
-  const primero = v.items[0];
-  if (!primero) {
-    return (
-      <span className="text-xs text-gray-400">Sin líneas cargadas</span>
-    );
-  }
-  const extra   = v.items.length - 1;
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="font-medium text-gray-800 leading-tight">
-        {primero.producto_nombre}
-      </span>
-      <div className="flex items-center gap-2 mt-0.5">
-        <span className="font-mono text-xs text-gray-400">{primero.sku}</span>
-        {extra > 0 && (
-          <span className="bg-gray-100 text-gray-500 text-xs px-1.5 py-0.5 rounded-full font-medium">
-            +{extra} más
-          </span>
-        )}
-      </div>
-    </div>
-  );
+/**
+ * IVA contenido en un total. Los precios se cargan CON IVA incluido, así que el
+ * impuesto se despeja hacia atrás — misma fórmula que usa /ventas/nueva.
+ *
+ * El origen de este POS mandaba siempre `tipo_iva: "EXENTA"` y `monto_iva: 0`.
+ * Acá no sirve: el servidor recalcula los totales por ítem y rechaza la venta
+ * con "Totales no coinciden" si no cuadran, y además la factura electrónica
+ * necesita el IVA real de cada producto.
+ */
+function calcIva(tipo: TipoIvaVenta, total: number): number {
+  if (tipo === "EXENTA") return 0;
+  if (tipo === "5%") return total - total / 1.05;
+  return total - total / 1.1;
 }
 
-/** Determina qué mostrar en la celda IVA cuando hay múltiples ítems. */
-function ivaResumen(v: Venta): string {
-  const tipos = [...new Set(v.items.map((i) => i.tipo_iva))];
-  if (tipos.length === 1) return ivaLabel[tipos[0]];
-  return "Mixto";
+function formatGs(v: number) {
+  return `Gs. ${Math.round(v || 0).toLocaleString("es-PY")}`;
 }
 
-// ── Componente principal ───────────────────────────────────────────────────────
+// ── Página principal ───────────────────────────────────────────────────────
 
-export default function VentasPage() {
-  const router = useRouter();
-  const [todas,      setTodas]      = useState<Venta[]>([]);
-  const [busqueda,   setBusqueda]   = useState("");
-  const [filtroTipo, setFiltroTipo] = useState<TipoVenta | "">("");
-  const [filtroIva,  setFiltroIva]  = useState<TipoIvaVenta | "">("");
-  // Rango de fechas (YYYY-MM-DD). Vacio = sin limite por ese lado, asi que se
-  // puede filtrar solo "desde" o solo "hasta".
-  const [fechaDesde, setFechaDesde] = useState("");
-  const [fechaHasta, setFechaHasta] = useState("");
-  /** Paginación en pantalla. "todas" = sin límite. */
-  const [porPagina,  setPorPagina]  = useState<number | "todas">(25);
-  const [pagina,     setPagina]     = useState(1);
-  const [ventaAnular, setVentaAnular] = useState<{ id: string; numero: string } | null>(null);
-  const [ventaRegenerar, setVentaRegenerar] = useState<{ id: string; numero: string; eraFactura: boolean } | null>(null);
-  const [regenerandoId, setRegenerandoId] = useState<string | null>(null);
-  const [errorRegenerar, setErrorRegenerar] = useState<string | null>(null);
-  const [expandidas, setExpandidas] = useState<Set<string>>(() => new Set());
-  // Tick para que el panel de caja recalcule su arqueo cuando cambian las
-  // ventas (una anulación mueve el efectivo esperado del turno).
+export default function CajaPage() {
+  // Estado de caja abierta: sin turno abierto no se cobra.
+  const [cajaAbierta, setCajaAbierta] = useState(false);
+  // Tick para que el CajaControlPanel refresque su arqueo después de cobrar,
+  // sin recargar la página.
   const [refreshCajaTick, setRefreshCajaTick] = useState(0);
 
-  const toggleExpandida = (id: string) => {
-    setExpandidas((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
+  // Búsqueda de productos (izquierda)
+  const [q, setQ] = useState("");
+  const [hits, setHits] = useState<ProductoHit[]>([]);
+  const [buscando, setBuscando] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const searchCacheRef = useRef<Map<string, { hits: ProductoHit[]; ts: number }>>(new Map());
+  const abortRef = useRef<AbortController | null>(null);
 
-  async function recargar() {
-    const data = await getVentas();
-    const ordenadas = [...data].sort((a, b) => {
-      const ta = new Date(a.fecha).getTime();
-      const tb = new Date(b.fecha).getTime();
-      return tb - ta || b.numero_control.localeCompare(a.numero_control);
-    });
-    setTodas(ordenadas);
-    setRefreshCajaTick((t) => t + 1);
+  // Carrito + producto destacado (derecha)
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [ultimoAgregado, setUltimoAgregado] = useState<CartItem | null>(null);
+
+  // Modal cobro
+  const [cobroOpen, setCobroOpen] = useState(false);
+  const [metodo, setMetodo] = useState<MetodoPago>("efectivo");
+  const [efectivoRecibido, setEfectivoRecibido] = useState("");
+  const [referencia, setReferencia] = useState("");
+  const [titular, setTitular] = useState("");
+  const [entidadId, setEntidadId] = useState("");
+  const [fechaAcreditacion, setFechaAcreditacion] = useState("");
+  const [entidades, setEntidades] = useState<EntidadBancaria[]>([]);
+  const [cobrando, setCobrando] = useState(false);
+  const [cobroError, setCobroError] = useState<string | null>(null);
+  const [ventaOk, setVentaOk] = useState<string | null>(null);
+
+  // Modal "asociar código de barras a un producto"
+  const [asociarOpen, setAsociarOpen] = useState(false);
+  const [asociarCode, setAsociarCode] = useState("");
+  const [asociarQuery, setAsociarQuery] = useState("");
+  const [asociarHits, setAsociarHits] = useState<ProductoHit[]>([]);
+  const [asociarBuscando, setAsociarBuscando] = useState(false);
+  const [asociarGuardando, setAsociarGuardando] = useState(false);
+  const [asociarError, setAsociarError] = useState<string | null>(null);
+
+  // Búsqueda dentro del modal de asociar
+  useEffect(() => {
+    if (!asociarOpen) return;
+    const trimmed = asociarQuery.trim();
+    if (trimmed.length < 2) { setAsociarHits([]); return; }
+    let cancel = false;
+    const t = setTimeout(async () => {
+      setAsociarBuscando(true);
+      try {
+        const res = await fetchWithSupabaseSession(
+          `/api/productos/search?q=${encodeURIComponent(trimmed)}&limit=15`,
+          { cache: "no-store" }
+        );
+        const j = await res.json();
+        if (cancel) return;
+        setAsociarHits(((j?.data?.items ?? []) as Record<string, unknown>[]).map(toHit));
+      } finally {
+        if (!cancel) setAsociarBuscando(false);
+      }
+    }, 220);
+    return () => { cancel = true; clearTimeout(t); };
+  }, [asociarQuery, asociarOpen]);
+
+  function abrirAsociarCodigo(code: string) {
+    setAsociarCode(code);
+    setAsociarQuery("");
+    setAsociarHits([]);
+    setAsociarError(null);
+    setAsociarOpen(true);
   }
 
+  // Cargar entidades bancarias (para transferencia/tarjeta)
   useEffect(() => {
-    void recargar();
+    let cancel = false;
+    fetchWithSupabaseSession("/api/entidades-bancarias", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => { if (!cancel && j?.success) setEntidades(j.data?.entidades ?? []); })
+      .catch(() => { /* opcional: sin entidades el select queda vacío */ });
+    return () => { cancel = true; };
   }, []);
 
-  const metricas = calcularMetricas(todas);
+  // Entidades disponibles según método (excluye tipo "caja" para trans/tarjeta).
+  const entidadesFiltradas = useMemo(() => {
+    if (metodo === "efectivo") return [];
+    if (metodo === "tarjeta") return entidades.filter((e) => e.tipo === "tarjeta" || e.tipo === "banco");
+    return entidades.filter((e) => e.tipo !== "caja"); // transferencia
+  }, [entidades, metodo]);
 
-  const filtradas = todas.filter((v) => {
-    // Búsqueda global: número de control, CLIENTE, nombre o SKU de cualquier ítem.
-    // Se prioriza para que buscar el nombre del cliente sea el caso principal
-    // (pedido explícito del cliente: "filtrar por cliente en vez de productos").
-    if (busqueda.trim() !== "") {
-      const t = busqueda.toLowerCase().trim();
-      const coincide =
-        (v.cliente_nombre ?? "").toLowerCase().includes(t) ||
-        v.numero_control.toLowerCase().includes(t) ||
-        // El numero de factura ahora se ve en la lista, asi que tambien se busca por el.
-        (v.numero_factura ?? "").toLowerCase().includes(t) ||
-        v.items.some(
-          (i) =>
-            i.producto_nombre.toLowerCase().includes(t) ||
-            i.sku.toLowerCase().includes(t)
-        );
-      if (!coincide) return false;
-    }
-    // Tipo de venta
-    if (filtroTipo !== "" && v.tipo_venta !== filtroTipo) return false;
-    // IVA: coincide si al menos un ítem tiene ese tipo
-    // `v.fecha` es ISO con hora; se compara solo la parte YYYY-MM-DD para que
-    // "hasta" incluya el dia completo y no corte a las 00:00.
-    const dia = (v.fecha ?? "").slice(0, 10);
-    if (fechaDesde && dia < fechaDesde) return false;
-    if (fechaHasta && dia > fechaHasta) return false;
-    if (filtroIva !== "" && !v.items.some((i) => i.tipo_iva === filtroIva))
-      return false;
-    return true;
-  });
-
-  const hayFiltros = busqueda || filtroTipo || filtroIva || fechaDesde || fechaHasta;
-
-  // Paginación en pantalla (sobre el resultado ya filtrado).
-  const totalPaginas =
-    porPagina === "todas" ? 1 : Math.max(1, Math.ceil(filtradas.length / porPagina));
-  const paginaSegura = Math.min(pagina, totalPaginas);
-  const visibles =
-    porPagina === "todas"
-      ? filtradas
-      : filtradas.slice((paginaSegura - 1) * porPagina, paginaSegura * porPagina);
-
-  // Si cambia el filtro (o el tamaño de página) y la página actual queda fuera
-  // de rango, volvemos a la primera. Evita quedar en una página vacía.
+  // Búsqueda con debounce + cache en memoria + AbortController.
+  // - Cache: las mismas letras dos veces (typo+backspace, volver a buscar algo
+  //   que ya viste) devuelven resultado sin fetch. TTL 50 min, por debajo de la
+  //   ~1 h de vida de las signed URLs de imagen, así nunca mostramos link roto.
+  // - Abort: al tipear la próxima letra se cancela el fetch viejo, para que una
+  //   respuesta lenta no pise a otra más nueva.
   useEffect(() => {
-    setPagina(1);
-  }, [busqueda, filtroTipo, filtroIva, fechaDesde, fechaHasta, porPagina]);
+    const trimmed = q.trim();
+    if (trimmed.length < 2) { setHits([]); return; }
+    const key = trimmed.toLowerCase();
+
+    const cached = searchCacheRef.current.get(key);
+    if (cached && Date.now() - cached.ts < 50 * 60 * 1000) {
+      setHits(cached.hits);
+      setBuscando(false);
+      return;
+    }
+
+    let cancel = false;
+    const t = setTimeout(async () => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      setBuscando(true);
+      try {
+        const res = await fetchWithSupabaseSession(
+          `/api/productos/search?q=${encodeURIComponent(trimmed)}&limit=15`,
+          { cache: "no-store", signal: controller.signal }
+        );
+        const j = await res.json();
+        if (cancel || controller.signal.aborted) return;
+        const items = ((j?.data?.items ?? []) as Record<string, unknown>[]).map(toHit);
+        searchCacheRef.current.set(key, { hits: items, ts: Date.now() });
+        // Techo defensivo: pasadas las 200 entradas, se tiran las más viejas.
+        if (searchCacheRef.current.size > 200) {
+          const oldest = Array.from(searchCacheRef.current.entries())
+            .sort((a, b) => a[1].ts - b[1].ts)
+            .slice(0, 50)
+            .map(([k]) => k);
+          for (const k of oldest) searchCacheRef.current.delete(k);
+        }
+        setHits(items);
+      } catch (e) {
+        if ((e as { name?: string })?.name === "AbortError") return;
+        throw e;
+      } finally {
+        if (!cancel && !controller.signal.aborted) setBuscando(false);
+      }
+    }, 180);
+    return () => { cancel = true; clearTimeout(t); };
+  }, [q]);
+
+  const addToCart = useCallback((p: ProductoHit) => {
+    const item: CartItem = {
+      producto_id: p.id,
+      producto_nombre: p.nombre,
+      sku: p.sku,
+      imagen_url: p.imagen_url,
+      stock_actual: p.stock_actual,
+      cantidad: 1,
+      precio_venta: p.precio_venta,
+      precio_mayorista: p.precio_mayorista,
+      cantidad_minima_mayorista: p.cantidad_minima_mayorista,
+      tipo_iva: p.tipo_iva,
+    };
+    setCart((prev) => {
+      const ex = prev.find((x) => x.producto_id === p.id);
+      if (ex) return prev.map((x) => x.producto_id === p.id ? { ...x, cantidad: x.cantidad + 1 } : x);
+      return [...prev, item];
+    });
+    setUltimoAgregado(item);
+    setQ("");
+    setHits([]);
+    inputRef.current?.focus();
+  }, []);
+
+  async function asociarYAgregar(prod: ProductoHit) {
+    setAsociarGuardando(true);
+    setAsociarError(null);
+    try {
+      const res = await fetchWithSupabaseSession(`/api/productos/${prod.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ codigo_barras: asociarCode }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j?.success) throw new Error(j?.error ?? "No se pudo guardar el código.");
+      addToCart({ ...prod, codigo_barras: asociarCode });
+      setAsociarOpen(false);
+    } catch (e) {
+      setAsociarError(e instanceof Error ? e.message : "No se pudo guardar el código.");
+    } finally {
+      setAsociarGuardando(false);
+    }
+  }
+
+  // Scanner: el lector tipea el código y manda Enter. Se busca primero un match
+  // exacto entre los hits que ya están en pantalla; si no hay, se consulta.
+  const onKeyDownBuscar = useCallback(async (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const term = q.trim();
+    if (!term) return;
+    const exact = hits.find(
+      (h) => h.codigo_barras === term || h.sku.toLowerCase() === term.toLowerCase()
+    );
+    if (exact) { addToCart(exact); return; }
+    try {
+      const res = await fetchWithSupabaseSession(
+        `/api/productos/search?q=${encodeURIComponent(term)}&limit=1`,
+        { cache: "no-store" }
+      );
+      const j = await res.json();
+      const first = (j?.data?.items ?? [])[0] as Record<string, unknown> | undefined;
+      if (first) addToCart(toHit(first));
+    } catch {
+      /* si falla la red, el usuario ve el buscador sin resultados */
+    }
+  }, [q, hits, addToCart]);
+
+  const updateCant = (id: string, cant: number) => {
+    setCart((prev) => prev.map((x) => x.producto_id === id ? { ...x, cantidad: Math.max(1, cant) } : x));
+  };
+  const removeFromCart = (id: string) => {
+    setCart((prev) => prev.filter((x) => x.producto_id !== id));
+    setUltimoAgregado((u) => (u && u.producto_id === id ? null : u));
+  };
+  const vaciarCarrito = () => { setCart([]); setUltimoAgregado(null); };
+
+  const total = useMemo(() => cart.reduce((s, it) => s + it.cantidad * precioEfectivo(it), 0), [cart]);
+  const cantTotal = useMemo(() => cart.reduce((s, it) => s + it.cantidad, 0), [cart]);
+
+  function abrirCobro() {
+    if (cart.length === 0) return;
+    setCobroError(null);
+    setMetodo("efectivo");
+    setEfectivoRecibido("");
+    setReferencia("");
+    setTitular("");
+    setEntidadId("");
+    setFechaAcreditacion(new Date().toISOString().slice(0, 10));
+    setCobroOpen(true);
+  }
+
+  // Confirmar cobro → crear venta + abrir ticket
+  async function confirmarCobro() {
+    if (cart.length === 0) return;
+    setCobrando(true);
+    setCobroError(null);
+    try {
+      const items: LineaVenta[] = cart.map((it) => {
+        const precio = precioEfectivo(it);
+        const totalLinea = it.cantidad * precio;
+        const montoIva = calcIva(it.tipo_iva, totalLinea);
+        return {
+          producto_id: it.producto_id,
+          producto_nombre: it.producto_nombre,
+          sku: it.sku,
+          cantidad: it.cantidad,
+          precio_venta_original: precio,
+          precio_venta: precio,
+          tipo_iva: it.tipo_iva,
+          tipo_precio: esMayoristaAplicado(it) ? "mayorista" : "minorista",
+          subtotal: totalLinea - montoIva,
+          monto_iva: montoIva,
+          total_linea: totalLinea,
+        };
+      });
+      const totalVenta = items.reduce((s, it) => s + it.total_linea, 0);
+      const ivaVenta = items.reduce((s, it) => s + it.monto_iva, 0);
+      const entidadSel = entidades.find((e) => e.id === entidadId);
+      const pagoDetalle = metodo === "efectivo"
+        ? null
+        : {
+            entidad_bancaria_id: entidadId || null,
+            entidad_nombre_snapshot: entidadSel?.nombre ?? null,
+            referencia: referencia.trim() || null,
+            titular: metodo === "transferencia" ? (titular.trim() || null) : null,
+            fecha_acreditacion: fechaAcreditacion || null,
+          };
+
+      const res = await saveVenta({
+        items,
+        moneda: "GS",
+        tipo_cambio: 1,
+        subtotal: totalVenta - ivaVenta,
+        monto_iva: ivaVenta,
+        total: totalVenta,
+        tipo_venta: "CONTADO",
+        metodo_pago: metodo,
+        cliente_id: null,
+        // El POS cobra al mostrador, sin cliente identificado, y la factura
+        // electrónica lo exige. Sale ticket; para facturar se usa Nueva venta.
+        emitir_factura: false,
+      }, undefined, pagoDetalle);
+      if (!res.success) {
+        setCobroError(res.error);
+        return;
+      }
+      const v = res.venta;
+      try { window.open(`/api/ventas/${v.id}/ticket?auto=1`, "_blank", "noopener"); } catch {}
+      setVentaOk(v.numero_control);
+      setCobroOpen(false);
+      vaciarCarrito();
+      setRefreshCajaTick((n) => n + 1);
+      setTimeout(() => setVentaOk(null), 3500);
+      inputRef.current?.focus();
+    } catch (e) {
+      setCobroError(e instanceof Error ? e.message : "No se pudo registrar la venta.");
+    } finally {
+      setCobrando(false);
+    }
+  }
+
+  const diferenciaEfectivo = useMemo(() => {
+    if (metodo !== "efectivo") return 0;
+    const r = parseMontoInput(efectivoRecibido);
+    if (!Number.isFinite(r) || r <= 0) return -total;
+    return r - total;
+  }, [efectivoRecibido, total, metodo]);
+  const vuelto = diferenciaEfectivo > 0 ? diferenciaEfectivo : 0;
+  const faltaEfectivo = diferenciaEfectivo < 0 ? -diferenciaEfectivo : 0;
+  const efectivoIngresado = parseMontoInput(efectivoRecibido) > 0;
+
+  // Foco en el buscador cuando la caja se abre: el cajero escanea sin tocar nada.
+  useEffect(() => {
+    if (cajaAbierta) inputRef.current?.focus();
+  }, [cajaAbierta]);
 
   return (
-    <div className="space-y-8">
-
-      <div>
-        <div className="flex items-center gap-2">
-          <span
-            aria-hidden="true"
-            className="inline-block h-1.5 w-1.5 rounded-full bg-[#4FAEB2]"
-            style={{ boxShadow: "0 0 0 3px rgba(79, 174, 178, 0.18)" }}
-          />
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#4FAEB2]">
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#4FAEB2]">
+            <span
+              aria-hidden="true"
+              className="inline-block h-1.5 w-1.5 rounded-full bg-[#4FAEB2]"
+              style={{ boxShadow: "0 0 0 3px rgba(79,174,178,0.18)" }}
+            />
             Zentra · Operaciones
-          </p>
+          </div>
+          <h1 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">Caja</h1>
+          <p className="mt-0.5 text-xs text-slate-500">Escaneá o buscá un producto y cobrálo directo.</p>
         </div>
-        <h1 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">Caja</h1>
-        <p className="mt-0.5 text-xs text-slate-500">Cobro, facturación y cierre de pedidos</p>
+        <Link
+          href="/ventas/ordenes"
+          className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+        >
+          Ver órdenes del día →
+        </Link>
       </div>
 
-      {/* Estado del turno de caja. Va arriba de todo porque condiciona el resto
-          de la pantalla: sin caja abierta no se cobra. */}
-      <CajaControlPanel refreshTick={refreshCajaTick} />
+      <CajaControlPanel onStateChange={setCajaAbierta} defaultCollapsed refreshTick={refreshCajaTick} />
 
       <PedidosPendientesCaja />
 
-      {/* ── Métricas del día ──────────────────────────────────────────────────── */}
-      <div>
-        <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-3">
-          Resumen de hoy —{" "}
-          {new Date().toLocaleDateString("es-PY", {
-            weekday: "long", day: "numeric", month: "long", year: "numeric",
-            timeZone: "America/Asuncion",
-          })}
-        </p>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <MetricCard
-            label="Facturación de hoy"
-            value={`Gs. ${metricas.facturacion.toLocaleString("es-PY")}`}
-            sub="Total incl. IVA"
-            accent
-          />
-          <MetricCard
-            label="Ventas de hoy"
-            value={String(metricas.cantidadVentas)}
-            sub={metricas.cantidadVentas === 1 ? "orden registrada" : "órdenes registradas"}
-          />
-          <MetricCard
-            label="Ticket promedio"
-            value={
-              metricas.ticketPromedio > 0
-                ? `Gs. ${Math.round(metricas.ticketPromedio).toLocaleString("es-PY")}`
-                : "—"
-            }
-            sub="Por orden de venta"
-          />
-          <MetricCard
-            label="Unidades vendidas"
-            value={String(metricas.productosVendidos)}
-            sub="Unidades despachadas"
-          />
+      {ventaOk && (
+        <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800 shadow-sm">
+          <CheckCircle2 className="h-5 w-5" /> Venta <strong>{ventaOk}</strong> registrada. Ticket enviado a imprimir.
         </div>
-      </div>
+      )}
 
-      {/* ── Tabla de ventas ───────────────────────────────────────────────────── */}
-      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm ring-1 ring-[#4FAEB2]/15 sm:p-5 lg:p-6">
-
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-xl font-semibold">Órdenes de venta</h2>
-          <Link
-            href="/ventas/nueva"
-            className="bg-[#0EA5E9] hover:bg-[#0284C7] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
-          >
-            + Nueva venta
-          </Link>
+      {/* Split POS */}
+      {!cajaAbierta ? (
+        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">
+          Abrí la caja para empezar a cobrar.
         </div>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-[1fr_460px] lg:min-h-[540px]">
+          {/* PANEL IZQUIERDO: buscador + carrito */}
+          <div className="flex flex-col rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-100 p-4">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  onKeyDown={onKeyDownBuscar}
+                  placeholder="Escaneá el código o buscá por nombre/SKU…"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-10 text-base outline-none focus:border-[#4FAEB2] focus:bg-white focus:ring-2 focus:ring-[#4FAEB2]/20"
+                  autoComplete="off"
+                />
+                {buscando && <Loader2 className="absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 animate-spin text-slate-400" />}
+              </div>
 
-        {/* Filtros */}
-        <div className="flex flex-wrap items-center gap-3 mb-5 pb-5 border-b border-gray-100">
-          <input
-            type="text"
-            placeholder="Buscar por cliente, N° de venta o factura, producto o SKU..."
-            value={busqueda}
-            onChange={(e) => setBusqueda(e.target.value)}
-            className={`${inputFilterClass} min-w-0 flex-1 sm:min-w-64`}
-          />
-          <FancySelect
-            value={filtroTipo}
-            onChange={(v) => setFiltroTipo(v as TipoVenta | "")}
-            ariaLabel="Filtrar por tipo de venta"
-            className="w-44"
-            size="sm"
-            options={[
-              { value: "", label: "Todos los tipos" },
-              { value: "CONTADO", label: "Contado" },
-              { value: "CREDITO", label: "Crédito" },
-            ]}
-          />
-          <FancySelect
-            value={filtroIva}
-            onChange={(v) => setFiltroIva(v as TipoIvaVenta | "")}
-            ariaLabel="Filtrar por IVA"
-            className="w-44"
-            size="sm"
-            options={[
-              { value: "", label: "Todos los IVA" },
-              { value: "EXENTA", label: "Exenta" },
-              { value: "5%", label: "IVA 5%" },
-              { value: "10%", label: "IVA 10%" },
-            ]}
-          />
-          <div className="flex items-center gap-1.5">
-            <label htmlFor="f-desde" className="text-xs font-medium text-slate-500">Desde</label>
-            <input
-              id="f-desde"
-              type="date"
-              value={fechaDesde}
-              max={fechaHasta || undefined}
-              onChange={(e) => setFechaDesde(e.target.value)}
-              className={`${inputFilterClass} w-[9.5rem]`}
-            />
-            <label htmlFor="f-hasta" className="text-xs font-medium text-slate-500">Hasta</label>
-            <input
-              id="f-hasta"
-              type="date"
-              value={fechaHasta}
-              min={fechaDesde || undefined}
-              onChange={(e) => setFechaHasta(e.target.value)}
-              className={`${inputFilterClass} w-[9.5rem]`}
-            />
-          </div>
-          {hayFiltros && (
-            <button
-              onClick={() => { setBusqueda(""); setFiltroTipo(""); setFiltroIva(""); setFechaDesde(""); setFechaHasta(""); }}
-              className="text-sm text-gray-400 hover:text-gray-600 transition-colors px-2"
-            >
-              Limpiar filtros
-            </button>
-          )}
-          <div className="ml-auto flex items-center gap-3">
-            <label className="flex items-center gap-1.5 text-sm text-gray-500">
-              <span className="hidden sm:inline">Mostrar</span>
-              <FancySelect
-                value={String(porPagina)}
-                onChange={(v) => setPorPagina(v === "todas" ? "todas" : Number(v))}
-                ariaLabel="Cantidad por página"
-                className="w-24"
-                size="sm"
-                options={[
-                  { value: "25", label: "25" },
-                  { value: "50", label: "50" },
-                  { value: "100", label: "100" },
-                  { value: "todas", label: "Todas" },
-                ]}
-              />
-            </label>
-            <span className="text-sm text-gray-400">
-              {filtradas.length} de {todas.length} ventas
-            </span>
-          </div>
-        </div>
-
-        {/* Tabla — min-w fuerza scroll horizontal en mobile; columnas secundarias
-            (Items, Cant total, IVA, Pago) se ocultan progresivamente. */}
-        <EdgeScrollArea>
-          <table className="w-full min-w-[760px] lg:min-w-0 text-left text-sm">
-            <thead>
-              <tr className="bg-slate-50 text-slate-600 text-sm font-semibold">
-                <th className="py-3 pr-4 font-medium">Número</th>
-                <th className="py-3 pr-4 font-medium">Documento</th>
-                <th className="py-3 pr-4 font-medium">Cliente</th>
-                <th className="py-3 pr-4 font-medium">Productos</th>
-                <th className="hidden py-3 pr-4 text-center font-medium lg:table-cell">Ítems</th>
-                <th className="py-3 pr-4 font-medium text-right hidden lg:table-cell">Cant. total</th>
-                <th className="py-3 pr-4 font-medium hidden lg:table-cell">IVA</th>
-                <th className="py-3 pr-4 font-medium text-right">Total</th>
-                <th className="hidden py-3 pr-4 font-medium lg:table-cell">Tipo</th>
-                <th className="hidden py-3 pr-4 font-medium lg:table-cell">Pago</th>
-                <th className="py-3 pr-4 font-medium">Fecha</th>
-                <th className="hidden py-3 pr-4 font-medium lg:table-cell">Estado</th>
-                <th className="py-3 font-medium text-center">Ticket</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtradas.length === 0 ? (
-                <tr>
-                  <td colSpan={13} className="py-12 text-center text-gray-400">
-                    {todas.length === 0
-                      ? "No hay ventas registradas"
-                      : "Ninguna venta coincide con los filtros"}
-                  </td>
-                </tr>
-              ) : (
-                visibles.map((v) => {
-                  const cantTotal = v.items.reduce((s, i) => s + i.cantidad, 0);
-                  const anulada = v.estado === "anulada";
-                  const abierta = expandidas.has(v.id);
-                  return (
-                    <Fragment key={v.id}>
-                    <tr className={`border-b border-slate-200 last:border-0 hover:bg-[#4FAEB2]/[0.04] transition-colors ${anulada ? "opacity-60" : ""}`}>
-                      <td className="py-4 pr-4 font-mono text-xs text-gray-500 align-middle">
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => toggleExpandida(v.id)}
-                            className="flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                            aria-label={abierta ? "Ocultar ítems" : "Ver todos los ítems"}
-                            title={abierta ? "Ocultar ítems" : "Ver todos los ítems"}
-                          >
-                            <svg
-                              width="12"
-                              height="12"
-                              viewBox="0 0 12 12"
-                              fill="none"
-                              className={`transition-transform ${abierta ? "rotate-90" : ""}`}
-                            >
-                              <path d="M4 2l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                          </button>
-                          <span>{v.numero_control}</span>
-                        </div>
-                      </td>
-                      {/* Documento fiscal emitido. Son DOS series distintas:
-                          FAC- solo numera las ventas facturadas, mientras que
-                          VTA- numera todas. Por eso VTA-000218 es FAC-000155 y
-                          no coinciden. El ticket no tiene numeracion propia: el
-                          comprobante impreso lleva el numero de venta. */}
-                      <td className="py-4 pr-4 align-middle whitespace-nowrap">
-                        {v.numero_factura ? (
-                          <span className="inline-flex items-center gap-1.5">
-                            <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
-                              Fac
-                            </span>
-                            <span className="font-medium tabular-nums text-slate-800">{v.numero_factura}</span>
-                          </span>
+              {hits.length > 0 && (
+                <ul className="mt-2 max-h-56 divide-y divide-slate-100 overflow-auto rounded-xl border border-slate-200 bg-white shadow-inner">
+                  {hits.map((p) => (
+                    <li
+                      key={p.id}
+                      onClick={() => addToCart(p)}
+                      className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm hover:bg-[#4FAEB2]/[0.08]"
+                    >
+                      <div className="h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                        {p.imagen_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={p.imagen_url} alt={p.nombre} className="h-full w-full object-cover" />
                         ) : (
-                          <span
-                            className="inline-flex items-center gap-1.5"
-                            title="Los tickets no llevan numeración propia: el comprobante impreso usa el número de venta."
-                          >
-                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                              Tkt
+                          <div className="flex h-full w-full items-center justify-center text-slate-300">
+                            <Package className="h-4 w-4" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium text-slate-900">{p.nombre}</p>
+                        <p className="font-mono text-[11px] text-slate-500">
+                          {p.sku}
+                          {p.cantidad_minima_mayorista != null && p.cantidad_minima_mayorista > 0 && p.precio_mayorista > 0 && p.precio_mayorista !== p.precio_venta && (
+                            <span className="ml-2 text-indigo-600">
+                              · desde {p.cantidad_minima_mayorista} u {formatGs(p.precio_mayorista)}
                             </span>
-                            <span className="tabular-nums text-slate-500">{v.numero_control}</span>
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-4 pr-4 align-middle text-slate-700">
-                        {v.cliente_id && v.cliente_nombre ? (
-                          <Link
-                            href={`/clientes/${v.cliente_id}`}
-                            className="font-medium text-slate-800 hover:underline"
-                          >
-                            {v.cliente_nombre}
-                          </Link>
-                        ) : v.cliente_nombre ? (
-                          <span className="font-medium text-slate-800">{v.cliente_nombre}</span>
-                        ) : (
-                          <span className="text-xs italic text-slate-400">Consumidor final</span>
-                        )}
-                      </td>
-                      <td
-                        className="py-4 pr-4 align-middle cursor-pointer"
-                        onClick={() => toggleExpandida(v.id)}
-                        title="Ver todos los ítems"
+                          )}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className={`text-[11px] font-medium ${p.stock_actual <= 0 ? "text-rose-600" : "text-emerald-700"}`}>
+                          {p.stock_actual <= 0 ? "Sin stock" : `${p.stock_actual} u`}
+                        </p>
+                        <p className="text-sm font-semibold tabular-nums text-slate-900">{formatGs(p.precio_venta)}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {/* Sin resultados + oferta para asociar código */}
+              {!buscando && q.trim().length >= 2 && hits.length === 0 && (
+                <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-sm">
+                  <p className="font-medium text-amber-900">
+                    Ningún producto encontrado con <span className="font-mono">«{q.trim()}»</span>.
+                  </p>
+                  {/^[0-9]{6,}$/.test(q.trim()) && (
+                    <>
+                      <p className="mt-1 text-xs text-amber-800">
+                        Parece un código de barras. ¿Querés asociarlo a un producto para que la próxima vez el scanner lo levante?
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => abrirAsociarCodigo(q.trim())}
+                        className="mt-2 inline-flex items-center rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-amber-600"
                       >
-                        <ResumenProductos v={v} />
-                      </td>
-                      <td className="hidden py-4 pr-4 text-center align-middle lg:table-cell">
-                        <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gray-100 text-xs font-semibold text-gray-600">
-                          {v.items.length}
-                        </span>
-                      </td>
-                      <td className="py-4 pr-4 text-right tabular-nums text-gray-700 align-middle hidden lg:table-cell">
-                        {cantTotal}
-                      </td>
-                      <td className="py-4 pr-4 align-middle hidden lg:table-cell">
-                        <span className="px-2 py-1 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700">
-                          {ivaResumen(v)}
-                        </span>
-                      </td>
-                      <td className="py-4 pr-4 text-right tabular-nums font-semibold text-gray-800 align-middle">
-                        {formatGs(v.total)}
-                      </td>
-                      <td className="hidden py-4 pr-4 align-middle lg:table-cell">
-                        <span className={`px-2 py-1 rounded-full text-xs font-semibold ${tipoVentaBadge[v.tipo_venta]}`}>
-                          {v.tipo_venta === "CONTADO"
-                            ? "Contado"
-                            : `Crédito ${v.plazo_dias ?? ""}d`}
-                        </span>
-                      </td>
-                      <td className="hidden py-4 pr-4 align-middle text-xs text-gray-600 lg:table-cell">
-                        {v.metodo_pago === "tarjeta" ? "Tarjeta"
-                          : v.metodo_pago === "transferencia" ? "Transfer."
-                          : v.metodo_pago === "efectivo" ? "Efectivo"
-                          : "—"}
-                      </td>
-                      <td className="py-4 pr-4 text-gray-500 text-xs tabular-nums align-middle">
-                        {formatFecha(v.fecha)}
-                      </td>
-                      <td className="hidden py-4 pr-4 align-middle lg:table-cell">
-                        {anulada ? (
-                          <span
-                            className="inline-flex items-center rounded-full px-2 py-1 text-xs font-semibold bg-rose-50 text-rose-800 ring-1 ring-rose-200"
-                            title={v.anulacion_motivo ?? undefined}
-                          >
-                            Anulada
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center rounded-full px-2 py-1 text-xs font-semibold bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200">
-                            Completada
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-4 text-center align-middle">
-                        <div className="inline-flex items-center gap-1.5">
-                          {v.genera_nota_remision && (
-                            <a
-                              href={`/api/ventas/${v.id}/ticket?tipo=remision`}
-                              target="_blank"
-                              rel="noopener"
-                              className="inline-flex items-center justify-center rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 hover:bg-sky-100 transition-colors"
-                              title="Nota de remisión (documento no fiscal)"
-                            >
-                              Nota de remisión
-                            </a>
-                          )}
-                          {/* Regla de anulación:
-                              - Sin factura ERP → botón Anular directo (reintegra stock).
-                              - Factura ERP con estado SIFEN aprobado/enviado/en_proceso
-                                → sólo link al panel SIFEN (cancelar via SET; cascada
-                                anula la venta en el server).
-                              - Factura ERP en borrador/generado/firmado/error_envio/
-                                rechazado/cancelado → link a la factura + botón Anular:
-                                el DE nunca llegó a SET, se puede descartar localmente. */}
-                          {v.factura_id ? (
-                            <Link
-                              href={`/facturas/${v.factura_id}`}
-                              className="inline-flex items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 transition-colors"
-                              title="Ver / gestionar factura electrónica (SIFEN)"
-                            >
-                              {v.numero_factura ? `Factura ${v.numero_factura}` : "Factura"}
-                            </Link>
+                        Asociar código a un producto
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Carrito */}
+            <div className="flex-1 overflow-auto p-4">
+              {cart.length === 0 ? (
+                <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-slate-400">
+                  <Package className="h-8 w-8 text-slate-300" />
+                  <p>Todavía no cargaste productos.</p>
+                  <p className="text-xs">Escaneá o buscá arriba.</p>
+                </div>
+              ) : (
+                <ul className="space-y-2">
+                  {cart.map((it) => (
+                    <li key={it.producto_id} className="rounded-xl border border-slate-200 bg-slate-50/40 p-3">
+                      <div className="flex items-start gap-3">
+                        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                          {it.imagen_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={it.imagen_url} alt={it.producto_nombre} className="h-full w-full object-cover" />
                           ) : (
-                            /* Venta sin factura electrónica (solo ticket): antes no había
-                               forma de volver a verla/reimprimirla desde Caja. */
-                            <a
-                              href={`/api/ventas/${v.id}/ticket`}
-                              target="_blank"
-                              rel="noopener"
-                              className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 transition-colors"
-                              title="Ver / reimprimir el ticket de esta venta"
-                            >
-                              Ticket
-                            </a>
+                            <div className="flex h-full w-full items-center justify-center text-slate-300">
+                              <Package className="h-5 w-5" />
+                            </div>
                           )}
-                          {!anulada && (() => {
-                            const est = v.factura_estado_sifen;
-                            const facturaBloqueaAnular =
-                              est === "aprobado" || est === "enviado" || est === "en_proceso";
-                            if (v.factura_id && facturaBloqueaAnular) return null;
-                            return (
-                              <button
-                                type="button"
-                                onClick={() => setVentaAnular({ id: v.id, numero: v.numero_control })}
-                                className="inline-flex items-center justify-center rounded-md border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50 transition-colors"
-                                title={
-                                  v.factura_id
-                                    ? "Anular venta y descartar factura (el DE nunca llegó a SET)"
-                                    : "Anular esta venta (reintegra stock)"
-                                }
-                              >
-                                Anular
-                              </button>
-                            );
-                          })()}
-                          {anulada && (
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">{it.producto_nombre}</p>
+                            {esMayoristaAplicado(it) && (
+                              <span className="rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700">
+                                Mayorista
+                              </span>
+                            )}
+                          </div>
+                          <p className="font-mono text-[11px] text-slate-500">
+                            {it.sku}
+                            {" · "}
+                            {formatGs(precioEfectivo(it))} c/u
+                            {!esMayoristaAplicado(it) && it.precio_mayorista > 0 && it.precio_mayorista !== it.precio_venta && it.cantidad_minima_mayorista != null && it.cantidad_minima_mayorista > 0 && (
+                              <span className="ml-1 text-indigo-500">
+                                (desde {it.cantidad_minima_mayorista} u → {formatGs(it.precio_mayorista)})
+                              </span>
+                            )}
+                          </p>
+                          <div className="mt-2 flex items-center gap-2">
                             <button
                               type="button"
-                              onClick={() =>
-                                setVentaRegenerar({
-                                  id: v.id,
-                                  numero: v.numero_control,
-                                  eraFactura: !!v.factura_id,
-                                })
-                              }
-                              disabled={regenerandoId === v.id}
-                              className="inline-flex items-center justify-center rounded-md border border-[#4FAEB2] bg-[#4FAEB2]/10 px-3 py-1.5 text-xs font-semibold text-[#3F8E91] hover:bg-[#4FAEB2]/20 transition-colors disabled:opacity-50"
-                              title={
-                                v.factura_id
-                                  ? "Regenerar como factura electrónica (clona cliente, ítems y precios)"
-                                  : "Regenerar como ticket (clona ítems y precios, sin SIFEN)"
-                              }
-                            >
-                              {regenerandoId === v.id ? "Regenerando…" : "Regenerar"}
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                    {abierta && (
-                      <tr className={`border-b border-slate-200 bg-slate-50/60 ${anulada ? "opacity-60" : ""}`}>
-                        <td colSpan={13} className="px-4 py-3">
-                          <div className="rounded-lg border border-slate-200 bg-white p-3">
-                            <div className="mb-2 flex items-baseline justify-between">
-                              <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                Detalle de la venta {v.numero_control}
-                              </h4>
-                              <span className="text-xs text-slate-500">
-                                {v.items.length} ítem{v.items.length === 1 ? "" : "s"} · {cantTotal} unidad{cantTotal === 1 ? "" : "es"}
-                              </span>
-                            </div>
-                            <div className="overflow-x-auto">
-                              <table className="w-full min-w-[560px] text-left text-sm">
-                                <thead>
-                                  <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
-                                    <th className="py-2 pr-3 font-medium">SKU</th>
-                                    <th className="py-2 pr-3 font-medium">Producto</th>
-                                    <th className="py-2 pr-3 font-medium text-right">Cant.</th>
-                                    <th className="py-2 pr-3 font-medium text-right">Precio unit.</th>
-                                    <th className="py-2 pr-3 font-medium">IVA</th>
-                                    <th className="py-2 font-medium text-right">Subtotal</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {v.items.map((it, idx) => (
-                                    <tr key={`${v.id}-item-${idx}`} className="border-b border-slate-100 last:border-0">
-                                      <td className="py-2 pr-3 font-mono text-xs text-slate-500">{it.sku || "—"}</td>
-                                      <td className="py-2 pr-3 text-slate-800">{it.producto_nombre}</td>
-                                      <td className="py-2 pr-3 text-right tabular-nums text-slate-700">{it.cantidad}</td>
-                                      <td className="py-2 pr-3 text-right tabular-nums text-slate-700">{formatGs(it.precio_venta)}</td>
-                                      <td className="py-2 pr-3">
-                                        <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
-                                          {ivaLabel[it.tipo_iva]}
-                                        </span>
-                                      </td>
-                                      <td className="py-2 text-right tabular-nums font-semibold text-slate-800">
-                                        {formatGs(it.total_linea)}
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                                <tfoot>
-                                  <tr className="border-t border-slate-200 text-sm">
-                                    <td colSpan={5} className="py-2 pr-3 text-right font-medium text-slate-600">
-                                      Total
-                                    </td>
-                                    <td className="py-2 text-right tabular-nums font-bold text-slate-900">
-                                      {formatGs(v.total)}
-                                    </td>
-                                  </tr>
-                                </tfoot>
-                              </table>
-                            </div>
+                              onClick={() => updateCant(it.producto_id, it.cantidad - 1)}
+                              className="h-7 w-7 rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                              aria-label="Menos"
+                            >−</button>
+                            <input
+                              type="number"
+                              min={1}
+                              value={it.cantidad}
+                              onChange={(e) => updateCant(it.producto_id, parseInt(e.target.value) || 1)}
+                              className="h-7 w-14 rounded-md border border-slate-200 bg-white text-center text-sm tabular-nums"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => updateCant(it.producto_id, it.cantidad + 1)}
+                              className="h-7 w-7 rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                              aria-label="Más"
+                            >+</button>
+                            <span className="ml-auto text-sm font-semibold tabular-nums text-slate-900">
+                              {formatGs(it.cantidad * precioEfectivo(it))}
+                            </span>
                           </div>
-                        </td>
-                      </tr>
-                    )}
-                    </Fragment>
-                  );
-                })
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeFromCart(it.producto_id)}
+                          className="text-slate-400 hover:text-rose-500"
+                          aria-label="Quitar"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
               )}
-            </tbody>
-          </table>
-        </EdgeScrollArea>
-
-        {/* Controles de página (solo si hay más de una) */}
-        {porPagina !== "todas" && totalPaginas > 1 && (
-          <div className="mt-4 flex items-center justify-between gap-3">
-            <span className="text-sm text-gray-500">
-              Página {paginaSegura} de {totalPaginas}
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setPagina((p) => Math.max(1, p - 1))}
-                disabled={paginaSegura <= 1}
-                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Anterior
-              </button>
-              <button
-                type="button"
-                onClick={() => setPagina((p) => Math.min(totalPaginas, p + 1))}
-                disabled={paginaSegura >= totalPaginas}
-                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Siguiente
-              </button>
             </div>
           </div>
-        )}
 
-      </div>
-
-      {/* FAB mobile: acceso 1-tap a "+ Nueva venta" desde cualquier scroll position */}
-      <MobileFab href="/ventas/nueva" label="Nueva venta" />
-
-      {ventaAnular && (
-        <AnularVentaModal
-          ventaId={ventaAnular.id}
-          numeroControl={ventaAnular.numero}
-          onClose={() => setVentaAnular(null)}
-          onAnulada={() => {
-            setVentaAnular(null);
-            void recargar();
-          }}
-        />
-      )}
-
-      {ventaRegenerar && (
-        <RegenerarVentaModal
-          numero={ventaRegenerar.numero}
-          eraFactura={ventaRegenerar.eraFactura}
-          enviando={regenerandoId === ventaRegenerar.id}
-          error={errorRegenerar}
-          onClose={() => {
-            if (regenerandoId) return;
-            setVentaRegenerar(null);
-            setErrorRegenerar(null);
-          }}
-          onConfirmar={async () => {
-            if (!ventaRegenerar) return;
-            const v = ventaRegenerar;
-            setRegenerandoId(v.id);
-            setErrorRegenerar(null);
-            try {
-              const res = await fetchWithSupabaseSession(
-                `/api/ventas/${v.id}/regenerar`,
-                { method: "POST" }
-              );
-              const body = await res.json().catch(() => ({}));
-              if (!res.ok || body?.success === false) {
-                setErrorRegenerar(body?.error ?? "No se pudo regenerar la venta.");
-                return;
-              }
-              const facturaId = body?.data?.factura?.id;
-              const nuevaVentaId = body?.data?.venta?.id;
-              // Factura → panel SIFEN con auto-pipeline (mismo criterio que
-              // la venta directa). Ticket → abrir el ticket comanda en pestaña
-              // nueva y recargar el listado.
-              if (facturaId) {
-                router.push(`/facturas/${facturaId}?auto=1`);
-                return;
-              }
-              if (nuevaVentaId) {
-                try {
-                  window.open(
-                    `/api/ventas/${nuevaVentaId}/ticket?mode=comandas&auto=1`,
-                    "_blank",
-                    "noopener"
-                  );
-                } catch {}
-              }
-              setVentaRegenerar(null);
-              void recargar();
-            } catch {
-              setErrorRegenerar("Error de red al regenerar la venta.");
-            } finally {
-              setRegenerandoId(null);
-            }
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-function RegenerarVentaModal({
-  numero,
-  eraFactura,
-  enviando,
-  error,
-  onClose,
-  onConfirmar,
-}: {
-  numero: string;
-  eraFactura: boolean;
-  enviando: boolean;
-  error: string | null;
-  onClose: () => void;
-  onConfirmar: () => void | Promise<void>;
-}) {
-  useEffect(() => {
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !enviando) onClose();
-    };
-    window.addEventListener("keydown", onEsc);
-    return () => window.removeEventListener("keydown", onEsc);
-  }, [onClose, enviando]);
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      role="dialog"
-      aria-modal="true"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !enviando) onClose();
-      }}
-    >
-      <div className="w-full max-w-md overflow-hidden rounded-xl bg-white shadow-2xl">
-        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#4FAEB2]/15">
-              <RotateCw className="h-5 w-5 text-[#3F8E91]" />
+          {/* PANEL DERECHO: producto destacado + totales */}
+          <div className="flex flex-col rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="relative min-h-[280px] flex-1 overflow-hidden rounded-t-2xl bg-gradient-to-br from-slate-100 to-slate-200">
+              {ultimoAgregado ? (
+                <div className="relative z-10 flex h-full items-center justify-center p-6">
+                  <div className="rounded-2xl border-2 border-white/20 bg-white/95 p-3 shadow-2xl">
+                    {ultimoAgregado.imagen_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={ultimoAgregado.imagen_url}
+                        alt={ultimoAgregado.producto_nombre}
+                        className="h-56 w-56 object-contain"
+                      />
+                    ) : (
+                      <div className="flex h-56 w-56 items-center justify-center text-slate-300">
+                        <Package className="h-24 w-24" />
+                      </div>
+                    )}
+                    <p className="mt-2 max-w-[224px] truncate text-center text-sm font-semibold text-slate-800">
+                      {ultimoAgregado.producto_nombre}
+                    </p>
+                    <p className="text-center font-mono text-[10px] text-slate-400">{ultimoAgregado.sku}</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex h-full flex-col items-center justify-center gap-2 text-slate-400">
+                  <Package className="h-12 w-12 text-slate-300" />
+                  <p className="text-xs">El último producto cargado se muestra acá.</p>
+                </div>
+              )}
             </div>
+
+            {/* Totales + botón */}
+            <div className="space-y-3 border-t border-slate-100 p-5">
+              <div className="flex items-baseline justify-between text-sm text-slate-500">
+                <span>Ítems</span>
+                <span className="font-medium tabular-nums text-slate-800">{cantTotal}</span>
+              </div>
+              <div className="flex items-baseline justify-between border-t border-dashed border-slate-200 pt-3">
+                <span className="text-sm font-medium text-slate-600">Total a cobrar</span>
+                <span className="text-3xl font-bold tabular-nums text-slate-900">{formatGs(total)}</span>
+              </div>
+              <button
+                type="button"
+                onClick={abrirCobro}
+                disabled={cart.length === 0}
+                className="w-full rounded-xl bg-[#4FAEB2] px-5 py-4 text-lg font-semibold text-white shadow-sm shadow-[#4FAEB2]/25 transition-colors hover:bg-[#3F8E91] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
+              >
+                Aceptar y cobrar
+              </button>
+              {cart.length > 0 && (
+                <button
+                  type="button"
+                  onClick={vaciarCarrito}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50"
+                >
+                  Vaciar carrito
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de cobro */}
+      {cobroOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => { if (!cobrando) setCobroOpen(false); }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-md space-y-4 rounded-2xl bg-white p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div>
-              <h3 className="text-base font-semibold text-slate-900">
-                Regenerar {eraFactura ? "factura" : "ticket"}
-              </h3>
-              <p className="text-xs text-slate-500">
-                {eraFactura
-                  ? "Se crea una nueva venta con factura electrónica."
-                  : "Se crea una nueva venta con ticket (sin SIFEN)."}
+              <h3 className="text-lg font-semibold text-slate-900">Cobrar</h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Total: <strong className="text-slate-900">{formatGs(total)}</strong> · {cantTotal} ítem{cantTotal === 1 ? "" : "s"}
               </p>
             </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={enviando}
-            className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-50"
-            aria-label="Cerrar"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
 
-        <div className="space-y-3 px-5 py-4 text-sm text-slate-700">
-          <p>
-            Vamos a crear una nueva venta clonando <span className="font-semibold text-slate-900">{numero}</span>.
-          </p>
-          <ul className="space-y-1.5 rounded-lg bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
-            <li className="flex items-start gap-2">
-              <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-              <span>Se copian cliente, ítems, precios, moneda y método de pago.</span>
-            </li>
-            {eraFactura ? (
-              <li className="flex items-start gap-2">
-                <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-                <span>Se emite una nueva factura FAC-XXXXXX y arranca el pipeline SIFEN.</span>
-              </li>
-            ) : (
-              <li className="flex items-start gap-2">
-                <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-                <span>Se re-imprime el ticket comanda. No se emite factura ni toca SIFEN.</span>
-              </li>
-            )}
-            <li className="flex items-start gap-2">
-              <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
-              <span>Se descuenta stock otra vez (se re-cobra a la caja).</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" />
-              <span>La venta anulada {numero} queda intacta como registro histórico.</span>
-            </li>
-          </ul>
-
-          {error && (
-            <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-              <span>{error}</span>
+            <div className="grid grid-cols-3 gap-2">
+              {(["efectivo", "transferencia", "tarjeta"] as MetodoPago[]).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMetodo(m)}
+                  className={`rounded-lg border px-3 py-3 text-sm font-medium capitalize transition-colors ${
+                    metodo === m
+                      ? "border-[#4FAEB2] bg-[#4FAEB2]/10 text-[#3F8E91]"
+                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  {m}
+                </button>
+              ))}
             </div>
-          )}
-        </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50 px-5 py-3">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={enviando}
-            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-          >
-            Cancelar
-          </button>
-          <button
-            type="button"
-            onClick={() => void onConfirmar()}
-            disabled={enviando}
-            className="rounded-lg bg-[#4FAEB2] px-4 py-2 text-sm font-semibold text-white hover:bg-[#3F8E91] disabled:opacity-50"
-          >
-            {enviando ? "Regenerando…" : eraFactura ? "Sí, regenerar factura" : "Sí, regenerar ticket"}
-          </button>
+            {metodo === "efectivo" && (
+              <>
+                <label className="block text-sm">
+                  <span className="mb-1 block font-medium text-slate-700">Efectivo recibido</span>
+                  <MontoInput
+                    value={efectivoRecibido}
+                    onChange={(n) => setEfectivoRecibido(String(n))}
+                    placeholder="0"
+                    decimals={false}
+                    className="w-full rounded-md border border-slate-200 px-3 py-2 text-lg tabular-nums outline-none focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20"
+                    autoFocus
+                  />
+                </label>
+                {efectivoIngresado && faltaEfectivo > 0 ? (
+                  <div className="flex items-baseline justify-between rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm">
+                    <span className="font-medium text-rose-700">Falta</span>
+                    <span className="text-xl font-bold tabular-nums text-rose-700">{formatGs(faltaEfectivo)}</span>
+                  </div>
+                ) : (
+                  <div className={`flex items-baseline justify-between rounded-lg border px-3 py-2 text-sm ${
+                    vuelto > 0 ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-slate-50"
+                  }`}>
+                    <span className={vuelto > 0 ? "font-medium text-emerald-700" : "text-slate-600"}>Vuelto</span>
+                    <span className={`text-xl font-bold tabular-nums ${vuelto > 0 ? "text-emerald-700" : "text-slate-900"}`}>
+                      {formatGs(vuelto)}
+                    </span>
+                  </div>
+                )}
+              </>
+            )}
+
+            {(metodo === "transferencia" || metodo === "tarjeta") && (
+              <div className="space-y-3">
+                <label className="block text-sm">
+                  <span className="mb-1 block font-medium text-slate-700">
+                    {metodo === "tarjeta" ? "Tarjeta / banco" : "Entidad / banco"}
+                  </span>
+                  <select
+                    value={entidadId}
+                    onChange={(e) => setEntidadId(e.target.value)}
+                    className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20"
+                  >
+                    <option value="">— Seleccionar —</option>
+                    {entidadesFiltradas.map((en) => (
+                      <option key={en.id} value={en.id}>
+                        {en.nombre}{en.codigo ? ` (${en.codigo})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {entidadesFiltradas.length === 0 && (
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      Sin entidades cargadas. Configuralas en Configuración → Entidades bancarias.
+                    </p>
+                  )}
+                </label>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block text-sm">
+                    <span className="mb-1 block font-medium text-slate-700">
+                      {metodo === "tarjeta" ? "Voucher / últimos 4" : "N° de operación"}
+                    </span>
+                    <input
+                      type="text"
+                      value={referencia}
+                      onChange={(e) => setReferencia(e.target.value)}
+                      placeholder={metodo === "tarjeta" ? "1234" : "Ej. 78912345"}
+                      className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20"
+                    />
+                  </label>
+                  <label className="block text-sm">
+                    <span className="mb-1 block font-medium text-slate-700">Fecha acreditación</span>
+                    <input
+                      type="date"
+                      value={fechaAcreditacion}
+                      onChange={(e) => setFechaAcreditacion(e.target.value)}
+                      className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20"
+                    />
+                  </label>
+                </div>
+
+                {metodo === "transferencia" && (
+                  <label className="block text-sm">
+                    <span className="mb-1 block font-medium text-slate-700">Titular (opcional)</span>
+                    <input
+                      type="text"
+                      value={titular}
+                      onChange={(e) => setTitular(e.target.value)}
+                      placeholder="Nombre del que hizo la transferencia"
+                      className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20"
+                    />
+                  </label>
+                )}
+              </div>
+            )}
+
+            {cobroError && (
+              <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{cobroError}</div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setCobroOpen(false)}
+                disabled={cobrando}
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmarCobro()}
+                disabled={cobrando}
+                className="rounded-lg bg-[#4FAEB2] px-5 py-2 text-sm font-semibold text-white hover:bg-[#3F8E91] disabled:opacity-50"
+              >
+                {cobrando ? "Cobrando…" : "Confirmar e imprimir"}
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* Modal: asociar código de barras a un producto existente */}
+      {asociarOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => { if (!asociarGuardando) setAsociarOpen(false); }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-lg space-y-4 rounded-2xl bg-white p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900">Asociar código a un producto</h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Código escaneado: <span className="font-mono text-slate-800">{asociarCode}</span>
+              </p>
+              <p className="mt-1 text-xs text-slate-400">
+                Buscá el producto y hacé click para guardarle este código de barras.
+              </p>
+            </div>
+
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                value={asociarQuery}
+                onChange={(e) => setAsociarQuery(e.target.value)}
+                placeholder="Buscar por nombre o SKU…"
+                className="w-full rounded-lg border border-slate-200 py-2 pl-9 pr-9 text-sm outline-none focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20"
+                autoFocus
+                autoComplete="off"
+              />
+              {asociarBuscando && <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-slate-400" />}
+            </div>
+
+            <div className="max-h-72 overflow-auto rounded-lg border border-slate-200">
+              {asociarQuery.trim().length < 2 ? (
+                <p className="p-4 text-center text-xs text-slate-400">Escribí al menos 2 caracteres para buscar.</p>
+              ) : asociarHits.length === 0 && !asociarBuscando ? (
+                <p className="p-4 text-center text-xs text-slate-400">Sin resultados.</p>
+              ) : (
+                <ul className="divide-y divide-slate-100">
+                  {asociarHits.map((p) => (
+                    <li
+                      key={p.id}
+                      onClick={() => void asociarYAgregar(p)}
+                      className={`flex cursor-pointer items-center gap-3 px-3 py-2 text-sm hover:bg-[#4FAEB2]/[0.08] ${
+                        asociarGuardando ? "pointer-events-none opacity-50" : ""
+                      }`}
+                    >
+                      <div className="h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                        {p.imagen_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={p.imagen_url} alt={p.nombre} className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-slate-300">
+                            <Package className="h-4 w-4" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium text-slate-900">{p.nombre}</p>
+                        <p className="font-mono text-[11px] text-slate-500">
+                          {p.sku}
+                          {p.codigo_barras && (
+                            <span className="ml-2 text-amber-600">· ya tiene código {p.codigo_barras}</span>
+                          )}
+                        </p>
+                      </div>
+                      <p className="text-sm font-semibold tabular-nums text-slate-900">{formatGs(p.precio_venta)}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {asociarError && (
+              <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{asociarError}</div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setAsociarOpen(false)}
+                disabled={asociarGuardando}
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
