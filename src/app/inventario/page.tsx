@@ -58,8 +58,6 @@ export default function InventarioPage() {
   const [filtroPorPrecio,  setFiltroPorPrecio]  = useState("");
   const [filtroValuacion,  setFiltroValuacion]  = useState<MetodoValuacion | "">("");
   const [filtroUbicacion,  setFiltroUbicacion]  = useState<string>(""); // "", "__sin__" o id
-  const [filtroTipo,       setFiltroTipo]       = useState<"todos" | "vendibles" | "insumos" | "mixtos">("todos");
-  const [tab,              setTab]               = useState<"reventa" | "menu" | "materia">("reventa");
   const [cargandoLista,    setCargandoLista]     = useState(true);
   const [soloStockBajo,    setSoloStockBajo]    = useState(false);
 
@@ -142,30 +140,6 @@ export default function InventarioPage() {
     // Solo stock bajo
     if (soloStockBajo && p.stock_actual > p.stock_minimo) return false;
 
-    // Tipo gastronómico (vendible/insumo/mixto)
-    if (filtroTipo !== "todos") {
-      const v = p.es_vendible !== false; // default true si null/undef
-      const i = p.es_insumo === true;
-      if (filtroTipo === "mixtos" && !(v && i)) return false;
-      if (filtroTipo === "vendibles" && !(v && !i)) return false;
-      if (filtroTipo === "insumos" && !(i && !v)) return false;
-    }
-
-    // Filtro por tab (Reventa | Menú | Materia prima)
-    const esVendible    = p.es_vendible !== false;
-    const esInsumo      = p.es_insumo === true;
-    const controlaStock = p.controla_stock !== false; // default true
-    if (tab === "reventa") {
-      // vendibles que mueven stock real (gaseosas, postres comprados, etc.)
-      if (!esVendible || !controlaStock || esInsumo) return false;
-    } else if (tab === "menu") {
-      // productos preparados (pizzas, lomitos, combos): vendibles SIN stock
-      if (!esVendible || controlaStock || esInsumo) return false;
-    } else {
-      // materia prima / insumos
-      if (!esInsumo) return false;
-    }
-
     return true;
   }), [
     todos,
@@ -176,17 +150,12 @@ export default function InventarioPage() {
     filtroValuacion,
     filtroUbicacion,
     soloStockBajo,
-    filtroTipo,
-    tab,
   ]);
 
-  // Resumen del listado visible (por pestaña). Solo productos que controlan stock
-  // entran en valorizado / bajo / disponibles; el resto (Menú sin control) se cuenta
-  // únicamente en "Total productos".
+  // Resumen del listado visible. Solo los productos que controlan stock entran en
+  // valorizado / bajo / disponibles; los que no lo controlan se cuentan únicamente
+  // en "Total productos".
   const resumen = useMemo(() => {
-    // Tienen stock real: Reventa (controla_stock) y Materia prima (insumos, que se
-    // mueven por compras/recetas). Solo el Menú "sin control" queda fuera.
-    // produccion_previa (Menú fabricado y stockeado) sí maneja stock real del terminado.
     const conStock = productos.filter(
       (p) => !(p.controla_stock === false && p.es_insumo !== true && p.modo_receta !== "produccion_previa")
     );
@@ -198,8 +167,7 @@ export default function InventarioPage() {
 
   const hayFiltrosActivos =
     filtroPorNombre || filtroPorSku || filtroPorCosto ||
-    filtroPorPrecio || filtroValuacion || filtroUbicacion || soloStockBajo ||
-    filtroTipo !== "todos";
+    filtroPorPrecio || filtroValuacion || filtroUbicacion || soloStockBajo;
 
   function limpiarFiltros() {
     setFiltroPorNombre("");
@@ -209,7 +177,6 @@ export default function InventarioPage() {
     setFiltroValuacion("");
     setFiltroUbicacion("");
     setSoloStockBajo(false);
-    setFiltroTipo("todos");
   }
 
   return (
@@ -244,41 +211,15 @@ export default function InventarioPage() {
         </div>
       </div>
 
-      {/* Tabs gastronómicos (filtran por tipo de producto) */}
-      <div className="border-b border-gray-200">
-        <nav className="-mb-px flex gap-6 overflow-x-auto" aria-label="Tabs">
-          {([
-            { id: "reventa", label: "Reventa", subtitle: "Productos comprados y revendidos" },
-            { id: "menu",    label: "Menú",    subtitle: "Productos preparados por el local" },
-            { id: "materia", label: "Materia prima", subtitle: "Insumos para costeo/recetas" },
-          ] as const).map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setTab(t.id)}
-              className={`whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium transition-colors ${
-                tab === t.id
-                  ? "border-amber-500 text-amber-600"
-                  : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
-              }`}
-              title={t.subtitle}
-            >
-              {t.label}
-            </button>
-          ))}
-        </nav>
-      </div>
-
-      {/* Resumen por pestaña */}
+      {/* Resumen del listado */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard compact label="Total productos" value={String(resumen.total)} accent
-          hint={tab === "reventa" ? "Reventa" : tab === "menu" ? "Menú" : "Materia prima"} />
+          hint="en el listado" />
         <StatCard compact label="Stock valorizado" value={formatGs(Math.round(resumen.stockValorizado))}
           hint="stock × costo prom." />
         <StatCard compact label="Stock bajo" value={String(resumen.bajo)}
           hint="≤ stock mínimo" />
-        <StatCard compact
-          label={tab === "materia" ? "Materias disponibles" : "Con stock disponible"}
+        <StatCard compact label="Con stock disponible"
           value={String(resumen.disponibles)} hint="stock > 0" />
       </div>
 
@@ -391,22 +332,6 @@ export default function InventarioPage() {
               />
               Solo stock bajo
             </label>
-            <div className="mt-4 flex items-center gap-1 rounded-md border border-gray-200 bg-gray-50 p-0.5">
-              {(["todos","vendibles","insumos","mixtos"] as const).map((opt) => (
-                <button
-                  key={opt}
-                  type="button"
-                  onClick={() => setFiltroTipo(opt)}
-                  className={`px-2.5 py-1 text-xs font-medium rounded transition ${
-                    filtroTipo === opt
-                      ? "bg-white text-amber-700 shadow-sm"
-                      : "text-gray-500 hover:text-gray-700"
-                  }`}
-                >
-                  {opt === "todos" ? "Todos" : opt[0].toUpperCase() + opt.slice(1)}
-                </button>
-              ))}
-            </div>
             {hayFiltrosActivos && (
               <button
                 onClick={limpiarFiltros}
@@ -433,15 +358,13 @@ export default function InventarioPage() {
                 <th className="py-3 pr-4 font-medium">Nombre</th>
                 <th className="hidden py-3 pr-4 font-medium lg:table-cell">SKU</th>
                 <th className="py-3 pr-4 font-medium">Costo Prom.</th>
-                {tab !== "materia" && <th className="py-3 pr-4 font-medium">Precio Venta</th>}
+                <th className="py-3 pr-4 font-medium">Precio Venta</th>
                 <th className="py-3 pr-4 font-medium text-center">Stock actual</th>
                 <th className="py-3 pr-4 text-center font-medium hidden lg:table-cell">Stock Mín.</th>
                 <th className="py-3 pr-4 font-medium hidden lg:table-cell">Cód. barras</th>
-                {tab !== "materia" && (
-                  <th className="hidden py-3 pr-6 text-right font-medium lg:table-cell">
-                    <span title="(precio - costo) / precio × 100">Margen s/venta</span>
-                  </th>
-                )}
+                <th className="hidden py-3 pr-6 text-right font-medium lg:table-cell">
+                  <span title="(precio - costo) / precio × 100">Margen s/venta</span>
+                </th>
                 <th className="py-3 pl-4 font-medium text-center w-28">Acción</th>
               </tr>
             </thead>
@@ -450,8 +373,8 @@ export default function InventarioPage() {
               {productos.map((p) => {
                 const stockBajo = p.stock_actual <= p.stock_minimo;
                 const margen = calcularMargenVenta(p.costo_promedio, p.precio_venta);
-                // "Sin control" SOLO para Menú (vendible sin stock). Los insumos
-                // (Materia prima) sí tienen stock real aunque controla_stock=false.
+                // "Sin control" es el producto vendible que no mueve stock. Los
+                // insumos sí tienen stock real aunque controla_stock=false.
                 const sinControl =
                   p.controla_stock === false && p.es_insumo !== true && p.modo_receta !== "produccion_previa";
                 return (
@@ -462,7 +385,8 @@ export default function InventarioPage() {
                         {(() => {
                           const v = p.es_vendible !== false;
                           const i = p.es_insumo === true;
-                          // Mixto/Insumo se siguen mostrando; Vendible queda oculto (redundante: ya hay tab).
+                          // Mixto/Insumo se siguen mostrando; Vendible no lleva chip
+                          // porque es el caso normal y etiquetaría a casi todo.
                           if (v && i) return <span className="inline-flex items-center rounded-full bg-purple-100 text-purple-700 text-[10px] font-medium px-2 py-0.5">Mixto</span>;
                           if (i) return <span className="inline-flex items-center rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-medium px-2 py-0.5">Insumo</span>;
                           return null;
@@ -471,7 +395,7 @@ export default function InventarioPage() {
                     </td>
                     <td className="hidden py-4 pr-4 font-mono text-gray-500 lg:table-cell">{p.sku}</td>
                     <td className="py-4 pr-4 text-gray-700">{formatGs(p.costo_promedio)}</td>
-                    {tab !== "materia" && <td className="py-4 pr-4 text-gray-700">{formatGs(p.precio_venta)}</td>}
+                        <td className="py-4 pr-4 text-gray-700">{formatGs(p.precio_venta)}</td>
                     <td className="py-4 pr-4 text-center">
                       {sinControl ? (
                         <span className="text-xs text-gray-400">— sin control</span>
@@ -492,11 +416,9 @@ export default function InventarioPage() {
                         <span className="text-gray-300">—</span>
                       )}
                     </td>
-                    {tab !== "materia" && (
-                      <td className={`hidden py-4 pr-6 text-right font-semibold tabular-nums lg:table-cell ${margenColor(margen)}`}>
-                        {margen.toFixed(2)}%
-                      </td>
-                    )}
+                    <td className={`hidden py-4 pr-6 text-right font-semibold tabular-nums lg:table-cell ${margenColor(margen)}`}>
+                      {margen.toFixed(2)}%
+                    </td>
                     <td className="py-4 pl-4 text-center">
                       <Link
                         href={`/inventario/${p.id}/editar`}

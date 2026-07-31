@@ -166,7 +166,7 @@ export async function GET(
     const { data: usuario, error } = await supabase
       .from("usuarios")
       .select(
-        "id, nombre, email, telefono, fecha_nacimiento, fecha_ingreso, tipo_contrato, salario_base, porcentaje_comision, ips, area, rol, estado, created_at, empresa_id"
+        "id, nombre, email, telefono, fecha_nacimiento, fecha_ingreso, tipo_contrato, salario_base, porcentaje_comision, ips, area, rol, estado, created_at, empresa_id, sucursal_predeterminada_id"
       )
       .eq("id", id)
       .single();
@@ -333,6 +333,7 @@ export async function PATCH(
       dashboard_view_ids,
       default_dashboard_view_id,
       rol: rolBody,
+      sucursal_id,
     } = body;
 
     const { data: usuario, error: errGet } = await supabase
@@ -407,6 +408,37 @@ export async function PATCH(
     if (ips !== undefined) updates.ips = Boolean(ips);
 
     if (rolNormalizado !== undefined) updates.rol = rolNormalizado;
+
+    // Sucursal del usuario. Solo admin: mover a alguien de sucursal le cambia por
+    // completo qué datos ve, así que no es una edición de perfil cualquiera.
+    // Se valida que la sucursal exista, esté activa y sea de la misma empresa;
+    // sin eso un id cualquiera dejaría al usuario mirando la nada.
+    if (sucursal_id !== undefined) {
+      if (!puede_editar_rol) {
+        return NextResponse.json({ error: "Sin permiso para cambiar la sucursal" }, { status: 403 });
+      }
+      const nuevaSucursal = typeof sucursal_id === "string" ? sucursal_id.trim() : "";
+      if (!nuevaSucursal) {
+        return NextResponse.json({ error: "Seleccioná una sucursal." }, { status: 400 });
+      }
+      const { data: suc, error: errSuc } = await supabase
+        .from("sucursales")
+        .select("id")
+        .eq("id", nuevaSucursal)
+        .eq("empresa_id", usuario.empresa_id)
+        .eq("activa", true)
+        .maybeSingle();
+      if (errSuc) {
+        return NextResponse.json({ error: errSuc.message }, { status: 400 });
+      }
+      if (!suc) {
+        return NextResponse.json(
+          { error: "La sucursal no existe, está inactiva o es de otra empresa." },
+          { status: 400 }
+        );
+      }
+      updates.sucursal_predeterminada_id = nuevaSucursal;
+    }
 
     if (estado !== undefined && authUserId) {
       const banDuration = estado === "inactivo" ? "876000h" : "none";

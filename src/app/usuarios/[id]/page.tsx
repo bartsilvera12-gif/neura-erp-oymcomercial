@@ -34,6 +34,7 @@ type Usuario = {
   rol: string | null;
   estado: string | null;
   created_at: string;
+  sucursal_predeterminada_id?: string | null;
   modulo_ids?: string[];
   modulos_empresa?: ModuloOpt[];
   dashboard_views_empresa?: { id: string; nombre: string; slug: string; orden: number }[];
@@ -156,6 +157,11 @@ function UsuarioDetailContent() {
   /** Aviso no bloqueante cuando el guardado omnicanal no pudo usar el schema tenant (PostgREST). */
   const [omnicanalWarning, setOmnicanalWarning] = useState<string | null>(null);
 
+  // Sucursal del usuario. Editable solo por quien puede cambiar el rol: mover a
+  // alguien de sucursal le cambia por completo qué datos ve.
+  const [sucursales, setSucursales] = useState<Array<{ id: string; nombre: string }>>([]);
+  const [sucursalId, setSucursalId] = useState("");
+
   useEffect(() => {
     if (!id) return;
     setLoadError(null);
@@ -170,6 +176,7 @@ function UsuarioDetailContent() {
         setOmnicanalWarning(null);
         setUsuario(u);
         setForm(usuarioToForm(u));
+        setSucursalId(u.sucursal_predeterminada_id ?? "");
         if (u.omnicanal) {
           setOmniAgent(Boolean(u.omnicanal.agent_enabled));
           setOmniScheduleId(u.omnicanal.work_schedule_id ?? "");
@@ -182,6 +189,23 @@ function UsuarioDetailContent() {
         setLoadError(err instanceof Error ? err.message : "No se pudo cargar el usuario");
       });
   }, [id]);
+
+  useEffect(() => {
+    let vivo = true;
+    (async () => {
+      try {
+        const res = await fetchWithSupabaseSession("/api/sucursales", { cache: "no-store" });
+        const json = await res.json();
+        if (!vivo || !res.ok) return;
+        setSucursales(json?.data?.sucursales ?? []);
+      } catch {
+        /* si falla, el select queda vacío y el guardado avisa */
+      }
+    })();
+    return () => {
+      vivo = false;
+    };
+  }, []);
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) {
     const { name, value, type } = e.target;
@@ -241,6 +265,12 @@ function UsuarioDetailContent() {
         area: form.area,
         estado: form.estado,
       };
+      // Solo se manda si cambió: el PATCH exige una sucursal válida cuando el
+      // campo viene, y reenviar la misma en cada guardado haría fallar el
+      // formulario entero si esa sucursal se desactivó por otro lado.
+      if (usuario.puede_editar_rol && sucursalId && sucursalId !== (usuario.sucursal_predeterminada_id ?? "")) {
+        body.sucursal_id = sucursalId;
+      }
       if (usuario.puede_editar_rol) {
         body.rol = rolFromNivelForm(form.nivel);
       }
@@ -333,6 +363,9 @@ function UsuarioDetailContent() {
         area: form.area,
         estado: form.estado,
         rol: rolActualizado ?? usuario.rol,
+        sucursal_predeterminada_id: usuario.puede_editar_rol && sucursalId
+          ? sucursalId
+          : usuario.sucursal_predeterminada_id,
         modulo_ids:
           usuario.puede_editar_modulos && !usuario.es_admin_empresa ? [...form.modulo_ids] : usuario.modulo_ids,
         dashboard_view_ids:
@@ -672,6 +705,39 @@ function UsuarioDetailContent() {
             nivelAccesoDisabled={!usuario.puede_editar_rol}
             extraSections={
               <>
+                {usuario.puede_editar_rol && (
+                  <SectionCard title="Sucursal" icon="🏬">
+                    <p className="mb-4 text-xs text-gray-500">
+                      El usuario ve únicamente los datos de esta sucursal: ventas, stock, caja y
+                      facturación. Al cambiarla tiene que cerrar sesión y volver a entrar para que
+                      tome efecto.
+                    </p>
+                    <label htmlFor="sucursal_id" className={usuarioFormLabel}>
+                      Sucursal asignada
+                    </label>
+                    <select
+                      id="sucursal_id"
+                      name="sucursal_id"
+                      value={sucursalId}
+                      onChange={(e) => setSucursalId(e.target.value)}
+                      className={usuarioFormInputGray}
+                    >
+                      <option value="">Sin sucursal asignada</option>
+                      {sucursales.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.nombre}
+                        </option>
+                      ))}
+                    </select>
+                    {!sucursalId && (
+                      <p className="mt-2 text-xs text-amber-700">
+                        Sin sucursal asignada el usuario no puede operar: todas las pantallas le
+                        responden que le pida una a un administrador.
+                      </p>
+                    )}
+                  </SectionCard>
+                )}
+
                 {showResetPwd ? (
                   <SectionCard title="Restablecer contraseña" icon="🔑">
                     <p className="text-xs text-gray-500 mb-4">
