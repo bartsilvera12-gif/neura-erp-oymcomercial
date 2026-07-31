@@ -77,6 +77,9 @@ export interface CreateVentaPgParams {
   permitirSinStock?: boolean;
   /** Si true y hay cliente, la venta emite nota de remisión (documento NO fiscal) con número NR-XXXXXX. */
   generaNotaRemision?: boolean;
+  /** Turno de caja al que pertenece la venta. Null si no hay caja abierta: la
+   *  venta se registra igual y queda fuera del arqueo, como las históricas. */
+  cajaId?: string | null;
   /** Si true (default), la venta activa el puente Venta → Factura ERP: crea
    *  `facturas` FAC-XXXXXX, `factura_items` y linkea `ventas.factura_id`.
    *  Si false, se registra solo la venta (ideal para "solo ticket"), no se
@@ -445,6 +448,7 @@ export async function createVentaTransaccionalPg(
         nota_remision_numero: notaRemisionNumero,
         fecha: fechaIso,
         observaciones: observacionesFinal,
+        caja_id: params.cajaId ?? null,
       })
       .select("id")
       .single();

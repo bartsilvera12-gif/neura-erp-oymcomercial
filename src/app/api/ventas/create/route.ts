@@ -10,6 +10,7 @@ import { API_ERRORS } from "@/lib/api/errors";
 import type { Venta, LineaVenta } from "@/lib/ventas/types";
 import { createServiceRoleClientWithDbSchema } from "@/lib/supabase/empresa-data-schema";
 import { estaFacturado, marcarFacturado } from "@/lib/caja/facturacion";
+import { getCajaAbiertaPg } from "@/lib/caja/server/caja-pg";
 
 /** Error tipado: el pedido que se intenta facturar ya tiene venta. */
 class PedidoYaFacturadoError extends Error {
@@ -257,10 +258,17 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Turno de caja al que se imputa la venta. Si la sucursal no tiene caja
+    // abierta la venta se registra igual con caja_id null: bloquear el cobro
+    // por no haber abierto turno sería una regla nueva, no un port.
+    const sucursalIdVenta = exigirSucursal(auth.sucursal_id);
+    const cajaAbierta = await getCajaAbiertaPg(schema, auth.empresa_id, sucursalIdVenta);
+
     const { ventaId, numeroControl, fechaIso, notaRemisionNumero, facturaId, numeroFactura, facturaWarning } = await createVentaTransaccionalPg({
       schema,
       empresaId: auth.empresa_id,
-      sucursalId: exigirSucursal(auth.sucursal_id),
+      sucursalId: sucursalIdVenta,
+      cajaId: cajaAbierta?.id ?? null,
       clienteId,
       observaciones,
       moneda,
@@ -378,6 +386,10 @@ export async function POST(request: NextRequest) {
     if (err instanceof PedidoYaFacturadoError) {
       return NextResponse.json(errorResponse(err.message), { status: 409 });
     }
+    // Usuario sin sucursal asignada: 409 con el mensaje accionable en vez del
+    // 500 genérico. El import ya estaba; faltaba la traducción.
+    const sinSucursal = respuestaSucursalNoAsignada(err);
+    if (sinSucursal) return sinSucursal;
     const msg = err instanceof Error ? err.message : "Error al crear la venta.";
     const status =
       msg.includes("Stock insuficiente") ||

@@ -9,6 +9,7 @@ import { FancySelect } from "@/components/ui/FancySelect";
 import MobileFab from "@/components/ui/MobileFab";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import { getVentas } from "@/lib/ventas/storage";
+import CajaControlPanel from "@/components/caja/CajaControlPanel";
 import PedidosPendientesCaja from "./PedidosPendientesCaja";
 import AnularVentaModal from "./AnularVentaModal";
 import { esMismoDiaAsuncion } from "@/lib/fecha/asuncion";
@@ -166,6 +167,9 @@ export default function VentasPage() {
   const [regenerandoId, setRegenerandoId] = useState<string | null>(null);
   const [errorRegenerar, setErrorRegenerar] = useState<string | null>(null);
   const [expandidas, setExpandidas] = useState<Set<string>>(() => new Set());
+  // Tick para que el panel de caja recalcule su arqueo cuando cambian las
+  // ventas (una anulación mueve el efectivo esperado del turno).
+  const [refreshCajaTick, setRefreshCajaTick] = useState(0);
 
   const toggleExpandida = (id: string) => {
     setExpandidas((prev) => {
@@ -184,6 +188,7 @@ export default function VentasPage() {
       return tb - ta || b.numero_control.localeCompare(a.numero_control);
     });
     setTodas(ordenadas);
+    setRefreshCajaTick((t) => t + 1);
   }
 
   useEffect(() => {
@@ -257,6 +262,10 @@ export default function VentasPage() {
         <h1 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">Caja</h1>
         <p className="mt-0.5 text-xs text-slate-500">Cobro, facturación y cierre de pedidos</p>
       </div>
+
+      {/* Estado del turno de caja. Va arriba de todo porque condiciona el resto
+          de la pantalla: sin caja abierta no se cobra. */}
+      <CajaControlPanel refreshTick={refreshCajaTick} />
 
       <PedidosPendientesCaja />
 
