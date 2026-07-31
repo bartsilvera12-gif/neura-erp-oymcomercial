@@ -9,9 +9,9 @@ export async function POST(request: NextRequest) {
   if (!res.ok) return NextResponse.json(errorResponse(res.error), { status: res.status });
   try {
     const parsed = parseProductosRows(res.ctx.rows);
-    const maps = await buildResolverMaps(res.ctx.schema, res.ctx.empresaId);
+    const maps = await buildResolverMaps(res.ctx.schema, res.ctx.empresaId, res.ctx.sucursalId);
     buildPreview(parsed, maps); // marca .match_id y .errors/.warnings
-    const out = await commitProductos(res.ctx.schema, res.ctx.empresaId, parsed, maps, res.ctx.crearFaltantes, {
+    const out = await commitProductos(res.ctx.schema, res.ctx.empresaId, res.ctx.sucursalId, parsed, maps, res.ctx.crearFaltantes, {
       filename: res.ctx.filename,
       createdBy: res.ctx.usuarioCatalogId,
       usuarioNombre: res.ctx.usuarioNombre,

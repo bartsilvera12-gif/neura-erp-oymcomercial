@@ -8,7 +8,7 @@ export async function POST(request: NextRequest) {
   if (!res.ok) return NextResponse.json(errorResponse(res.error), { status: res.status });
   try {
     const parsed = parseProductosRows(res.ctx.rows);
-    const maps = await buildResolverMaps(res.ctx.schema, res.ctx.empresaId);
+    const maps = await buildResolverMaps(res.ctx.schema, res.ctx.empresaId, res.ctx.sucursalId);
     const preview = buildPreview(parsed, maps);
     return NextResponse.json(successResponse(preview));
   } catch (e) {

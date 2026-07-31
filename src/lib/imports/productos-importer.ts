@@ -79,7 +79,17 @@ export interface ResolverMaps {
   ubicacionesByCodigo: Map<string, string>;
 }
 
-export async function buildResolverMaps(schemaRaw: string, empresaId: string): Promise<ResolverMaps> {
+/**
+ * `sucursalId` acota el match de productos existentes a la sucursal que importa.
+ * Sin eso, un SKU repetido en otra sucursal haría que la fila del archivo se
+ * resuelva como UPDATE del producto de esa otra sucursal: el importador le
+ * pisaría stock y costo a un local que ni siquiera participa de la importación.
+ */
+export async function buildResolverMaps(
+  schemaRaw: string,
+  empresaId: string,
+  sucursalId: string
+): Promise<ResolverMaps> {
   const schema = assertAllowedChatDataSchema(schemaRaw);
   const pool = getChatPostgresPool();
   if (!pool) throw new Error("Pool no disponible.");
@@ -89,7 +99,10 @@ export async function buildResolverMaps(schemaRaw: string, empresaId: string): P
   const tU = quoteSchemaTable(schema, "inventario_ubicaciones");
 
   const [prods, cats, provs, ubis] = await Promise.all([
-    pool.query<ProductoExistente>(`SELECT id, sku, codigo_barras, stock_actual FROM ${tP} WHERE empresa_id=$1::uuid`, [empresaId]),
+    pool.query<ProductoExistente>(
+      `SELECT id, sku, codigo_barras, stock_actual FROM ${tP} WHERE empresa_id=$1::uuid AND sucursal_id=$2::uuid`,
+      [empresaId, sucursalId]
+    ),
     pool.query<{ id: string; nombre: string }>(`SELECT id, nombre FROM ${tC} WHERE empresa_id=$1::uuid AND activo=true`, [empresaId]),
     pool.query<{ id: string; nombre: string }>(`SELECT id, nombre FROM ${tPr} WHERE empresa_id=$1::uuid`, [empresaId]),
     pool.query<{ id: string; nombre: string; codigo: string | null }>(`SELECT id, nombre, codigo FROM ${tU} WHERE empresa_id=$1::uuid AND activo=true`, [empresaId]),
@@ -239,6 +252,8 @@ export interface CommitContext {
 export async function commitProductos(
   schemaRaw: string,
   empresaId: string,
+  /** Sucursal destino: todo lo que se inserte queda acá (productos y movimientos). */
+  sucursalId: string,
   parsed: ProductoParsed[],
   maps: ResolverMaps,
   crearFaltantes: boolean,
@@ -272,14 +287,14 @@ export async function commitProductos(
     try {
       await pool.query(
         `INSERT INTO ${tM} (
-           empresa_id, producto_id, producto_nombre, producto_sku,
+           empresa_id, sucursal_id, producto_id, producto_nombre, producto_sku,
            tipo, cantidad, costo_unitario, origen, referencia, fecha,
            created_by, usuario_nombre
          ) VALUES (
-           $1::uuid, $2::uuid, $3, $4, $5, $6::numeric, $7::numeric, $8, $9, now(),
-           $10::uuid, $11
+           $1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7::numeric, $8::numeric, $9, $10, now(),
+           $11::uuid, $12
          )`,
-        [empresaId, producto_id, producto_nombre, producto_sku, tipo, cantidad,
+        [empresaId, sucursalId, producto_id, producto_nombre, producto_sku, tipo, cantidad,
          costo_unitario, origen, refFinal, ctx.createdBy ?? null, ctx.usuarioNombre ?? null]
       );
       out.movimientos_generados++;
@@ -381,15 +396,15 @@ export async function commitProductos(
           }
           const inserted = await pool.query<{ id: string }>(
             `INSERT INTO ${tP} (
-               empresa_id, nombre, sku, codigo_barras, codigo_barras_interno,
+               empresa_id, sucursal_id, nombre, sku, codigo_barras, codigo_barras_interno,
                unidad_medida, costo_promedio, precio_venta, stock_actual, stock_minimo,
                metodo_valuacion, activo, categoria_principal_id, proveedor_principal_id, ubicacion_principal_id
              ) VALUES (
-               $1::uuid, $2, NULLIF($3,''), NULLIF($4,''), $5::boolean,
-               $6, $7::numeric, $8::numeric, $9::numeric, $10::numeric,
-               $11, $12::boolean, $13::uuid, $14::uuid, $15::uuid
+               $1::uuid, $2::uuid, $3, NULLIF($4,''), NULLIF($5,''), $6::boolean,
+               $7, $8::numeric, $9::numeric, $10::numeric, $11::numeric,
+               $12, $13::boolean, $14::uuid, $15::uuid, $16::uuid
              ) RETURNING id`,
-            [empresaId, p.nombre, p.sku, codigoBarras, codigoInterno,
+            [empresaId, sucursalId, p.nombre, p.sku, codigoBarras, codigoInterno,
              p.unidad_medida, p.costo_promedio, p.precio_venta, p.stock_actual, p.stock_minimo,
              p.metodo_valuacion, p.activo, categoriaId, proveedorId, ubicacionId]
           );

@@ -11,6 +11,12 @@ import { parseUploadFile } from "@/lib/excel/import";
 
 export interface AuthCtx {
   empresaId: string;
+  /**
+   * Sucursal del usuario que importa. Todo lo que se cree queda en ESA sucursal:
+   * sin esto los productos entran con sucursal_id NULL y no aparecen en ninguna
+   * pantalla, porque el listado filtra por la sucursal del usuario.
+   */
+  sucursalId: string;
   schema: string;
   usuarioCatalogId: string | null;
   usuarioNombre: string | null;
@@ -33,6 +39,18 @@ export async function leerArchivoYAuth(request: Request): Promise<
   const empresaId = tenant.auth.empresa_id;
   const schema = await fetchDataSchemaForEmpresaId(empresaId);
 
+  // Se corta acá y no más adelante: importar 1000 filas para descubrir después
+  // que ninguna es visible sería peor que no dejar importar.
+  const sucursalId = tenant.auth.sucursal_id;
+  if (!sucursalId) {
+    return {
+      ok: false,
+      status: 409,
+      error:
+        "Tu usuario no tiene una sucursal asignada, y todo lo que importes queda en tu sucursal. Pedile a un administrador que te asigne una desde Usuarios.",
+    };
+  }
+
   let form: FormData;
   try {
     form = await request.formData();
@@ -52,6 +70,7 @@ export async function leerArchivoYAuth(request: Request): Promise<
     ok: true,
     ctx: {
       empresaId,
+      sucursalId,
       schema,
       usuarioCatalogId: tenant.auth.usuarioCatalogId ?? null,
       usuarioNombre: tenant.auth.user?.email ?? null,
