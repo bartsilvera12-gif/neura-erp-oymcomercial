@@ -228,6 +228,12 @@ export async function saveProducto(
         : 0,
     descripcion: datos.descripcion ?? null,
     tipo_iva: datos.tipo_iva ?? "10%",
+    controlado_por_peso: datos.controlado_por_peso === true,
+    precio_kg_entero: datos.precio_kg_entero ?? null,
+    precio_kg_recortado: datos.precio_kg_recortado ?? null,
+    modalidades_activas: Array.isArray(datos.modalidades_activas) && datos.modalidades_activas.length > 0
+      ? datos.modalidades_activas
+      : null,
   };
 
   const res = await fetch("/api/productos", {
@@ -295,6 +301,10 @@ export async function updateProducto(
   if (datos.descripcion !== undefined) body.descripcion = datos.descripcion;
   if (datos.modo_receta !== undefined) body.modo_receta = datos.modo_receta;
   if (datos.tipo_iva !== undefined) body.tipo_iva = datos.tipo_iva;
+  if (datos.controlado_por_peso !== undefined) body.controlado_por_peso = datos.controlado_por_peso;
+  if (datos.precio_kg_entero !== undefined) body.precio_kg_entero = datos.precio_kg_entero;
+  if (datos.precio_kg_recortado !== undefined) body.precio_kg_recortado = datos.precio_kg_recortado;
+  if (datos.modalidades_activas !== undefined) body.modalidades_activas = datos.modalidades_activas;
 
   const res = await fetch(`/api/productos/${encodeURIComponent(id)}`, {
     method: "PATCH",

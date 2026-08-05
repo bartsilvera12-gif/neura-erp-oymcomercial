@@ -29,6 +29,10 @@ interface ProductoSearchHit {
   controla_stock: boolean;
   modo_receta: string;
   tipo_iva: "EXENTA" | "5%" | "10%";
+  controlado_por_peso: boolean;
+  precio_kg_entero: number | null;
+  precio_kg_recortado: number | null;
+  modalidades_activas: string[] | null;
 }
 
 const DEFAULT_LIMIT = 30;
@@ -68,7 +72,8 @@ export async function GET(request: NextRequest) {
           "precio_venta, precio_mayorista, precio_distribuidor, costo_promedio, stock_actual, stock_minimo, " +
           "unidad_medida, metodo_valuacion, imagen_path, imagen_url, " +
           "categoria_principal_id, proveedor_principal_id, ubicacion_principal_id, " +
-          "es_vendible, controla_stock, modo_receta, tipo_iva, activo"
+          "es_vendible, controla_stock, modo_receta, tipo_iva, activo, " +
+          "controlado_por_peso, precio_kg_entero, precio_kg_recortado, modalidades_activas"
       )
       .eq("empresa_id", empresaId)
       .eq("activo", true)
@@ -107,6 +112,14 @@ export async function GET(request: NextRequest) {
       controla_stock: r.controla_stock !== false,
       modo_receta: typeof r.modo_receta === "string" ? r.modo_receta : "preparado_al_vender",
       tipo_iva: (r.tipo_iva === "EXENTA" || r.tipo_iva === "5%" ? r.tipo_iva : "10%") as "EXENTA" | "5%" | "10%",
+      // Peso: se propagan para que el POS pueda abrir el modal al agregar
+      // al carrito. Los productos por unidad seguirán con controlado_por_peso=false.
+      controlado_por_peso: r.controlado_por_peso === true,
+      precio_kg_entero: r.precio_kg_entero != null ? Number(r.precio_kg_entero) : null,
+      precio_kg_recortado: r.precio_kg_recortado != null ? Number(r.precio_kg_recortado) : null,
+      modalidades_activas: Array.isArray(r.modalidades_activas)
+        ? r.modalidades_activas.filter((m: unknown): m is string => typeof m === "string")
+        : null,
     }));
 
     // Firmar URLs solo para los primeros 20 visibles (optimización).
@@ -141,6 +154,10 @@ export async function GET(request: NextRequest) {
       controla_stock: r.controla_stock,
       modo_receta: r.modo_receta,
       tipo_iva: r.tipo_iva,
+      controlado_por_peso: r.controlado_por_peso,
+      precio_kg_entero: r.precio_kg_entero,
+      precio_kg_recortado: r.precio_kg_recortado,
+      modalidades_activas: r.modalidades_activas,
     }));
 
     return NextResponse.json(successResponse({ items: hits, count: hits.length, q }));

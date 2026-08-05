@@ -38,6 +38,10 @@ export interface CreateVentaItemInput {
   subtotal: number;
   monto_iva: number;
   total_linea: number;
+  /** Metadatos de venta por peso (queso, jamón). Undefined en ventas por unidad. */
+  modalidad?: "entero" | "recortado";
+  unidad_venta?: string;
+  precio_unitario_display?: number;
 }
 
 export interface CreateVentaPedidoCocinaInput {
@@ -498,7 +502,11 @@ export async function createVentaTransaccionalPg(
   };
 
   try {
-    // 6) Insertar items (bulk)
+    // 6) Insertar items (bulk).
+    // Los campos modalidad / unidad_venta / precio_unitario_display son
+    // NULLABLE en el DB: solo llegan cuando el producto es controlado_por_peso.
+    // En ventas por unidad quedan en NULL y el ticket sigue renderizando el
+    // formato tradicional "2× PRODUCTO".
     const itemsRows = items.map((line) => ({
       empresa_id: params.empresaId,
       venta_id: ventaId,
@@ -513,26 +521,35 @@ export async function createVentaTransaccionalPg(
       subtotal: line.subtotal,
       monto_iva: line.monto_iva,
       total_linea: line.total_linea,
+      modalidad: line.modalidad ?? null,
+      unidad_venta: line.unidad_venta ?? null,
+      precio_unitario_display: line.precio_unitario_display ?? null,
     }));
     const insItems = await sb.from("ventas_items").insert(itemsRows);
     if (insItems.error) throw new Error(insItems.error.message);
 
     // 7) Descuento de stock + movimientos solo para productos con controla_stock=true SIN receta.
+    // El descuento se hace vía RPC atómica (`fn_venta_descontar_stock`) que
+    // ejecuta `stock_actual = GREATEST(stock_actual - $1, 0)` en un único
+    // UPDATE. Antes se leía el stock en JS y se escribía el resultado, y dos
+    // ventas concurrentes del mismo producto podían leer el mismo valor y
+    // sobrevender. La RPC cierra esa ventana.
     for (const line of items) {
       const p = stockMap.get(line.producto_id)!;
       if (recetaByProducto.has(line.producto_id)) continue;
       // produccion_previa: descuenta su propio stock del terminado aunque controla_stock=false.
       if (!p.controlaStock && p.modo !== "produccion_previa") continue;
-      // El stock nunca baja de 0: si se vendió sin stock, queda en 0 (la cantidad real
-      // vendida queda registrada en el movimiento SALIDA, así no se pierde trazabilidad).
-      const nuevoStock = Math.max(0, p.stock - line.cantidad);
       stockPrevio.push({ producto_id: line.producto_id, stock_actual: p.stock });
-      const upd = await sb
-        .from("productos")
-        .update({ stock_actual: nuevoStock })
-        .eq("id", line.producto_id)
-        .eq("empresa_id", params.empresaId);
-      if (upd.error) throw new Error(upd.error.message);
+      const rpc = await sb.rpc("fn_venta_descontar_stock", {
+        p_producto_id: line.producto_id,
+        p_empresa_id: params.empresaId,
+        p_cantidad: line.cantidad,
+      });
+      if (rpc.error) throw new Error(rpc.error.message);
+      const nuevoStock = Number(rpc.data);
+      if (!Number.isFinite(nuevoStock)) {
+        throw new Error(`RPC descuento devolvió stock inválido para producto ${line.producto_id}`);
+      }
       p.stock = nuevoStock;
 
       const mov = await sb.from("movimientos_inventario").insert({
@@ -555,18 +572,20 @@ export async function createVentaTransaccionalPg(
     }
 
     // 7b) Descontar materia prima (insumos) por explosión de receta + movimiento SALIDA por insumo.
+    // Mismo patrón atómico que en 7): un UPDATE server-side vía RPC.
     for (const [insId, need] of insumoNeed) {
       const m = insumoMeta.get(insId)!;
-      // Igual que productos: el stock de insumos nunca baja de 0 (la salida real
-      // queda registrada en el movimiento SALIDA del insumo).
-      const nuevoStock = Math.max(0, m.stock - need);
       stockPrevio.push({ producto_id: insId, stock_actual: m.stock });
-      const upd = await sb
-        .from("productos")
-        .update({ stock_actual: nuevoStock })
-        .eq("id", insId)
-        .eq("empresa_id", params.empresaId);
-      if (upd.error) throw new Error(upd.error.message);
+      const rpc = await sb.rpc("fn_venta_descontar_stock", {
+        p_producto_id: insId,
+        p_empresa_id: params.empresaId,
+        p_cantidad: need,
+      });
+      if (rpc.error) throw new Error(rpc.error.message);
+      const nuevoStock = Number(rpc.data);
+      if (!Number.isFinite(nuevoStock)) {
+        throw new Error(`RPC descuento devolvió stock inválido para insumo ${insId}`);
+      }
       m.stock = nuevoStock;
 
       const mov = await sb.from("movimientos_inventario").insert({

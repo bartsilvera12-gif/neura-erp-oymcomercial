@@ -9,6 +9,8 @@ import type { MetodoValuacion, TipoIvaProducto } from "@/lib/inventario/types";
 import ProductImageUploader from "@/components/inventario/ProductImageUploader";
 import SelectFromList from "@/components/inventario/SelectFromList";
 import { CrearRapidoModal } from "@/components/inventario/CrearRapidoModal";
+import { WeightConfigSection, emptyWeightConfig, type WeightConfigValue } from "@/components/inventario/WeightConfigSection";
+import type { ModalidadPeso } from "@/lib/inventario/types";
 import ProveedoresCostos from "@/components/inventario/ProveedoresCostos";
 import { MargenPorCanal } from "@/components/inventario/MargenPorCanal";
 
@@ -95,6 +97,7 @@ export default function EditarProductoPage() {
   const [unidadReceta, setUnidadReceta] = useState("");
   const [factorCompraReceta, setFactorCompraReceta] = useState("1");
   const [tiempoPrepMinutos, setTiempoPrepMinutos] = useState("0");
+  const [weightCfg, setWeightCfg] = useState<WeightConfigValue>(emptyWeightConfig());
 
   useEffect(() => {
     let cancel = false;
@@ -220,6 +223,17 @@ export default function EditarProductoPage() {
       setTiempoPrepMinutos(String(p.tiempo_prep_minutos ?? 0));
       // (Antes se inferia tipoGastro de los flags para pintar el selector; ahora
       // es const="reventa" y no hay que setearlo.)
+      // Config de peso desde el producto cargado. `modalidades_activas` viene
+      // como string[] (JSONB del API) — filtro contra los valores válidos
+      // para no propagar valores rotos al form.
+      const modalidadesRaw = Array.isArray(p.modalidades_activas) ? p.modalidades_activas : [];
+      const modalidadesOk = modalidadesRaw.filter((x): x is ModalidadPeso => x === "entero" || x === "recortado");
+      setWeightCfg({
+        controlado_por_peso: p.controlado_por_peso === true,
+        precio_kg_entero: typeof p.precio_kg_entero === "number" ? p.precio_kg_entero : null,
+        precio_kg_recortado: typeof p.precio_kg_recortado === "number" ? p.precio_kg_recortado : null,
+        modalidades_activas: modalidadesOk,
+      });
     }).finally(() => {
       if (!cancelled) setCargando(false);
     });
@@ -324,6 +338,24 @@ export default function EditarProductoPage() {
       }
 
       const cambioCodigo = codigoIngresado !== (codigoOriginal ?? "");
+      // Guard cliente-side para el bloque de peso (el server también valida,
+      // pero es mejor UX evitar el round-trip que rebota con 400).
+      if (weightCfg.controlado_por_peso) {
+        if (weightCfg.modalidades_activas.length === 0) {
+          showErr("Activá al menos una modalidad para el producto por peso.");
+          return;
+        }
+        if (weightCfg.modalidades_activas.includes("entero") && !(weightCfg.precio_kg_entero && weightCfg.precio_kg_entero > 0)) {
+          showErr("Cargá un precio por kg (entero) mayor a 0.");
+          return;
+        }
+        if (weightCfg.modalidades_activas.includes("recortado") && !(weightCfg.precio_kg_recortado && weightCfg.precio_kg_recortado > 0)) {
+          showErr("Cargá un precio por kg (recortado/feteado) mayor a 0.");
+          return;
+        }
+      }
+      const stockDecimal = parseFloat(form.stock_actual) || 0;
+      const stockMinimoDecimal = parseFloat(form.stock_minimo) || 0;
       const updatePayload: Parameters<typeof updateProducto>[1] = {
         nombre: form.nombre.trim().toUpperCase(),
         sku: form.sku.trim().toUpperCase(),
@@ -332,9 +364,17 @@ export default function EditarProductoPage() {
         precio_mayorista: form.precio_mayorista.trim() !== "" ? parseFloat(form.precio_mayorista) || null : null,
         cantidad_minima_mayorista: form.cantidad_minima_mayorista.trim() !== "" ? parseFloat(form.cantidad_minima_mayorista) || null : null,
         precio_distribuidor: form.precio_distribuidor.trim() !== "" ? parseFloat(form.precio_distribuidor) || null : null,
-        stock_actual: parseInt(form.stock_actual) || 0,
-        stock_minimo: parseInt(form.stock_minimo) || 0,
-        unidad_medida: form.unidad_medida.trim().toUpperCase() || "UNIDAD",
+        // Peso: se aceptan decimales con hasta 3 dígitos. Antes esto era
+        // parseInt y cortaba productos por kg a números enteros.
+        stock_actual: stockDecimal,
+        stock_minimo: stockMinimoDecimal,
+        // Si es por peso, la unidad la fuerza la API a KG por el CHECK del DB;
+        // igual la mandamos así el usuario no ve "UNIDAD" cuando reabre la ficha.
+        unidad_medida: weightCfg.controlado_por_peso ? "KG" : (form.unidad_medida.trim().toUpperCase() || "UNIDAD"),
+        controlado_por_peso: weightCfg.controlado_por_peso,
+        precio_kg_entero: weightCfg.controlado_por_peso ? weightCfg.precio_kg_entero : null,
+        precio_kg_recortado: weightCfg.controlado_por_peso ? weightCfg.precio_kg_recortado : null,
+        modalidades_activas: weightCfg.controlado_por_peso ? weightCfg.modalidades_activas : null,
         metodo_valuacion: form.metodo_valuacion,
         categoria_principal_id: categoriaId,
         ubicacion_principal_id: ubicacionId,
@@ -595,6 +635,11 @@ export default function EditarProductoPage() {
                 setImagenUrl(info.imagen_url);
               }}
             />
+          </div>
+
+          {/* Venta por peso (queso, jamón, fraccionables) */}
+          <div className="border-t border-slate-100 pt-6">
+            <WeightConfigSection value={weightCfg} onChange={setWeightCfg} />
           </div>
 
           {/* Clasificación, Proveedor, Ubicación */}

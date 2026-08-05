@@ -126,10 +126,31 @@ export async function anularVentaCore(
   const entradasInsertadas: string[] = [];
   const stockPrevio: Array<{ producto_id: string; stock_actual: number }> = [];
 
+  // Guardia de idempotencia por producto: si en un intento anterior ya se
+  // insertó una ENTRADA con origen='anulacion_venta' para esta venta+producto
+  // (por ejemplo el update de estado falló después de los inserts y el usuario
+  // reintenta), NO se re-reintegra — devolvería el stock doble. La idempotencia
+  // vieja se apoyaba solo en venta.estado='anulada', que se seteaba al final.
+  const yaReintegradas = new Set<string>();
+  const reintegrosPrevios = await sb
+    .from("movimientos_inventario")
+    .select("producto_id")
+    .eq("venta_id", ventaId)
+    .eq("empresa_id", empresaId)
+    .eq("tipo", "ENTRADA")
+    .eq("origen", "anulacion_venta");
+  if (reintegrosPrevios.error) throw new Error(reintegrosPrevios.error.message);
+  for (const r of (reintegrosPrevios.data ?? []) as Array<{ producto_id: string }>) {
+    yaReintegradas.add(String(r.producto_id));
+  }
+
   try {
     for (const m of movs) {
       const cantidad = Number(m.cantidad);
       if (!Number.isFinite(cantidad) || cantidad <= 0) continue;
+      // Skip idempotente: este producto ya tiene una ENTRADA por anulación de
+      // esta misma venta en un intento anterior. No sumar de nuevo.
+      if (yaReintegradas.has(String(m.producto_id))) continue;
 
       const prodQ = await sb
         .from("productos")
@@ -172,6 +193,7 @@ export async function anularVentaCore(
         .single();
       if (ins.error) throw new Error(ins.error.message);
       entradasInsertadas.push(String((ins.data as { id: string }).id));
+      yaReintegradas.add(String(m.producto_id));
     }
 
     // Anular CxC (si existe). El caller ya decidió si permite o no cobros.

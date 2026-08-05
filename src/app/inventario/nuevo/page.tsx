@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import MontoInput from "@/components/ui/MontoInput";
 import SelectFromList from "@/components/inventario/SelectFromList";
 import { CrearRapidoModal } from "@/components/inventario/CrearRapidoModal";
+import { WeightConfigSection, emptyWeightConfig, type WeightConfigValue } from "@/components/inventario/WeightConfigSection";
 import { MargenPorCanal } from "@/components/inventario/MargenPorCanal";
 import { productoExiste, saveProducto } from "@/lib/inventario/storage";
 import type { MetodoValuacion, TipoIvaProducto } from "@/lib/inventario/types";
@@ -47,6 +48,7 @@ export default function NuevoProductoPage() {
   const [skuPatrones, setSkuPatrones] = useState<{ prefix: string; siguiente: string }[]>([]);
   const [modalCategoriaAbierto, setModalCategoriaAbierto] = useState(false);
   const [modalProveedorAbierto, setModalProveedorAbierto] = useState(false);
+  const [weightCfg, setWeightCfg] = useState<WeightConfigValue>(emptyWeightConfig());
 
   // Relaciones opcionales
   const [categoriaId, setCategoriaId] = useState<string | null>(null);
@@ -302,6 +304,22 @@ export default function NuevoProductoPage() {
       const codigo: string | null = codigoEnInput || null;
       const interno = false; // ya no se autogeneran códigos internos; el barcode es real
 
+      // Guard cliente-side del bloque de peso (el server también valida).
+      if (weightCfg.controlado_por_peso) {
+        if (weightCfg.modalidades_activas.length === 0) {
+          showErr("Activá al menos una modalidad para el producto por peso.");
+          return;
+        }
+        if (weightCfg.modalidades_activas.includes("entero") && !(weightCfg.precio_kg_entero && weightCfg.precio_kg_entero > 0)) {
+          showErr("Cargá un precio por kg (entero) mayor a 0.");
+          return;
+        }
+        if (weightCfg.modalidades_activas.includes("recortado") && !(weightCfg.precio_kg_recortado && weightCfg.precio_kg_recortado > 0)) {
+          showErr("Cargá un precio por kg (recortado/feteado) mayor a 0.");
+          return;
+        }
+      }
+
       let guardado;
       try {
         guardado = await saveProducto({
@@ -313,9 +331,17 @@ export default function NuevoProductoPage() {
           precio_mayorista: form.precio_mayorista.trim() !== "" ? parseFloat(form.precio_mayorista) || null : null,
           precio_distribuidor: form.precio_distribuidor.trim() !== "" ? parseFloat(form.precio_distribuidor) || null : null,
           cantidad_minima_mayorista: form.cantidad_minima_mayorista.trim() !== "" ? parseFloat(form.cantidad_minima_mayorista) || null : null,
-          stock_actual: parseInt(form.stock_actual) || 0,
-          stock_minimo: parseInt(form.stock_minimo) || 0,
-          unidad_medida: form.unidad_medida.trim().toUpperCase(),
+          // Decimales admitidos (parseFloat) — antes era parseInt y cortaba
+          // los kilos a enteros. Aplica para todos los productos, no solo peso.
+          stock_actual: parseFloat(form.stock_actual) || 0,
+          stock_minimo: parseFloat(form.stock_minimo) || 0,
+          // Si es por peso, la unidad la fuerza el server a KG. Se manda así
+          // aquí también para que el POST inicial ya sea coherente.
+          unidad_medida: weightCfg.controlado_por_peso ? "KG" : form.unidad_medida.trim().toUpperCase(),
+          controlado_por_peso: weightCfg.controlado_por_peso,
+          precio_kg_entero: weightCfg.controlado_por_peso ? weightCfg.precio_kg_entero : null,
+          precio_kg_recortado: weightCfg.controlado_por_peso ? weightCfg.precio_kg_recortado : null,
+          modalidades_activas: weightCfg.controlado_por_peso ? weightCfg.modalidades_activas : null,
           metodo_valuacion: form.metodo_valuacion,
           codigo_barras: codigo,
           codigo_barras_interno: interno,
@@ -699,6 +725,11 @@ export default function NuevoProductoPage() {
                 ]}
               />
             )}
+          </div>
+
+          {/* Venta por peso (queso, jamón, fraccionables) */}
+          <div className="border-t border-slate-100 pt-6">
+            <WeightConfigSection value={weightCfg} onChange={setWeightCfg} />
           </div>
 
           {/* Clasificación, Proveedor, Ubicación */}

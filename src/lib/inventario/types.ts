@@ -3,6 +3,16 @@ export type TipoMovimiento = "ENTRADA" | "SALIDA" | "AJUSTE";
 export type OrigenMovimiento = "compra" | "venta" | "ajuste_manual" | "inventario_inicial" | "anulacion_venta" | "anulacion_compra" | "produccion";
 export type TipoIvaProducto = "EXENTA" | "5%" | "10%";
 
+/** Modalidades de venta para productos controlados por peso (queso, jamón, etc.). */
+export type ModalidadPeso = "entero" | "recortado";
+export const MODALIDADES_PESO: ReadonlyArray<ModalidadPeso> = ["entero", "recortado"];
+
+/** Etiqueta humana por modalidad (ES). Usada en POS y ticket. */
+export const MODALIDAD_LABEL: Record<ModalidadPeso, string> = {
+  entero: "Entero",
+  recortado: "Recortado / feteado",
+};
+
 export interface Producto {
   id: string;
   nombre: string;
@@ -48,6 +58,14 @@ export interface Producto {
   modo_receta?: string;
   /** IVA que se aplica al vender este producto (default '10%'). Se copia a la línea de venta. */
   tipo_iva?: TipoIvaProducto;
+  /** Si true, el producto se vende por peso (KG) y el POS abre modal de peso. */
+  controlado_por_peso?: boolean;
+  /** Precio por kg para la modalidad "entero". Obligatorio si 'entero' está en modalidades_activas. */
+  precio_kg_entero?: number | null;
+  /** Precio por kg para la modalidad "recortado/feteado". Obligatorio si 'recortado' está en modalidades_activas. */
+  precio_kg_recortado?: number | null;
+  /** Modalidades habilitadas para vender. NULL / [] para productos por unidad. */
+  modalidades_activas?: ModalidadPeso[] | null;
 }
 
 export interface MovimientoInventario {

@@ -7,6 +7,10 @@ export type EstadoVenta = "pendiente" | "completada" | "anulada";
  *  'costo' se conserva SOLO como histórico (ventas viejas); ya no se ofrece en la UI. */
 export type TipoPrecioVenta = "minorista" | "mayorista" | "distribuidor" | "costo";
 
+/** Modalidad de venta para productos controlados por peso (KG). Coincide con
+ *  el CHECK chk_ventas_items_modalidad_valida de la migración de peso. */
+export type ModalidadVenta = "entero" | "recortado";
+
 /** Un ítem dentro de una venta (una línea de producto). */
 export interface LineaVenta {
   producto_id:           string;
@@ -21,6 +25,13 @@ export interface LineaVenta {
   subtotal:              number;  // precio_venta × cantidad
   monto_iva:             number;
   total_linea:           number;  // subtotal + monto_iva
+  /** Modalidad de venta para productos por peso. Undefined en ventas por unidad. */
+  modalidad?:            ModalidadVenta;
+  /** Unidad que se muestra en el ticket ("KG" para peso). */
+  unidad_venta?:         string;
+  /** Precio unitario que se pintó en el ticket (== precio_venta en la línea,
+   *  pero explícito para persistirlo al regenerar tickets viejos). */
+  precio_unitario_display?: number;
 }
 
 /** Cabecera de venta: condiciones comerciales + totales consolidados. */

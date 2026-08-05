@@ -33,6 +33,18 @@ function asItems(body: unknown): CreateVentaItemInput[] | null {
     const tp = r.tipo_precio;
     const tipoPrecio: "minorista" | "mayorista" | "distribuidor" | "costo" =
       tp === "mayorista" || tp === "distribuidor" || tp === "costo" ? tp : "minorista";
+    // Peso: modalidad opcional; se acepta solo si es valor conocido.
+    const modalidadRaw = r.modalidad;
+    const modalidad: "entero" | "recortado" | undefined =
+      modalidadRaw === "entero" || modalidadRaw === "recortado" ? modalidadRaw : undefined;
+    const unidadVenta = typeof r.unidad_venta === "string" && r.unidad_venta.trim().length > 0
+      ? r.unidad_venta.trim().toUpperCase()
+      : undefined;
+    const precioUnitarioDisplayRaw = r.precio_unitario_display;
+    const precioUnitarioDisplay =
+      typeof precioUnitarioDisplayRaw === "number" && Number.isFinite(precioUnitarioDisplayRaw)
+        ? precioUnitarioDisplayRaw
+        : undefined;
     out.push({
       producto_id: String(r.producto_id ?? ""),
       producto_nombre: String(r.producto_nombre ?? ""),
@@ -45,6 +57,9 @@ function asItems(body: unknown): CreateVentaItemInput[] | null {
       subtotal: Number(r.subtotal),
       monto_iva: Number(r.monto_iva),
       total_linea: Number(r.total_linea),
+      modalidad,
+      unidad_venta: unidadVenta,
+      precio_unitario_display: precioUnitarioDisplay,
     });
   }
   // NaN/Infinity bypasean el chequeo de coherencia de totales en

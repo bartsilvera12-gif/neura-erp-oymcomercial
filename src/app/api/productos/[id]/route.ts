@@ -12,7 +12,11 @@ const PRODUCTO_COLS =
   "codigo_barras, codigo_barras_interno, imagen_path, imagen_url, " +
   "categoria_principal_id, ubicacion_principal_id, proveedor_principal_id, " +
   "es_vendible, es_insumo, controla_stock, valorizado, unidad_compra, unidad_receta, " +
-  "factor_compra_receta, tiempo_prep_minutos, descripcion, precio_mayorista, cantidad_minima_mayorista, precio_distribuidor, modo_receta, tipo_iva";
+  "factor_compra_receta, tiempo_prep_minutos, descripcion, precio_mayorista, cantidad_minima_mayorista, precio_distribuidor, modo_receta, tipo_iva, " +
+  "controlado_por_peso, precio_kg_entero, precio_kg_recortado, modalidades_activas";
+
+/** Ver /api/productos/route.ts para la lógica original de parseWeightConfig. */
+const MODALIDADES_VALIDAS_PATCH: ReadonlySet<string> = new Set(["entero", "recortado"]);
 
 function toNumber(v: unknown): unknown {
   return typeof v === "string" ? Number(v) : v;
@@ -33,6 +37,10 @@ function rowToApi(r: Record<string, unknown>): Record<string, unknown> {
     precio_mayorista: r.precio_mayorista != null ? toNumber(r.precio_mayorista) : null,
     cantidad_minima_mayorista: r.cantidad_minima_mayorista != null ? toNumber(r.cantidad_minima_mayorista) : null,
     precio_distribuidor: r.precio_distribuidor != null ? toNumber(r.precio_distribuidor) : null,
+    controlado_por_peso: r.controlado_por_peso === true,
+    precio_kg_entero: r.precio_kg_entero != null ? toNumber(r.precio_kg_entero) : null,
+    precio_kg_recortado: r.precio_kg_recortado != null ? toNumber(r.precio_kg_recortado) : null,
+    modalidades_activas: Array.isArray(r.modalidades_activas) ? r.modalidades_activas : null,
   };
 }
 
@@ -170,6 +178,39 @@ export async function PATCH(
     }
     if (body.tipo_iva === "EXENTA" || body.tipo_iva === "5%" || body.tipo_iva === "10%") {
       patch.tipo_iva = body.tipo_iva;
+    }
+
+    // Configuración por peso — solo se toca si viene declarado en el body.
+    // Envuelve toda la validación para evitar duplicar en POST / PATCH.
+    if (body.controlado_por_peso !== undefined) {
+      const controlado = body.controlado_por_peso === true;
+      patch.controlado_por_peso = controlado;
+      if (!controlado) {
+        patch.precio_kg_entero = null;
+        patch.precio_kg_recortado = null;
+        patch.modalidades_activas = null;
+      } else {
+        const raw = body.modalidades_activas;
+        const modalidades: string[] = Array.isArray(raw)
+          ? raw.filter((m): m is string => typeof m === "string" && MODALIDADES_VALIDAS_PATCH.has(m))
+          : [];
+        if (modalidades.length === 0) {
+          return NextResponse.json(errorResponse("Activá al menos una modalidad (entero o recortado) para el producto por peso."), { status: 400 });
+        }
+        const precioEntero = toNumberOrNull(body.precio_kg_entero);
+        const precioRecortado = toNumberOrNull(body.precio_kg_recortado);
+        if (modalidades.includes("entero") && (precioEntero == null || precioEntero <= 0)) {
+          return NextResponse.json(errorResponse("Cargá un precio por kg (entero) mayor a 0."), { status: 400 });
+        }
+        if (modalidades.includes("recortado") && (precioRecortado == null || precioRecortado <= 0)) {
+          return NextResponse.json(errorResponse("Cargá un precio por kg (recortado/feteado) mayor a 0."), { status: 400 });
+        }
+        patch.precio_kg_entero = modalidades.includes("entero") ? precioEntero : null;
+        patch.precio_kg_recortado = modalidades.includes("recortado") ? precioRecortado : null;
+        patch.modalidades_activas = modalidades;
+        // CHECK del DB obliga KG cuando controlado_por_peso=true.
+        patch.unidad_medida = "KG";
+      }
     }
 
     if (Object.keys(patch).length === 0) {

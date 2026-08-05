@@ -8,6 +8,8 @@ import MontoInput, { parseMontoInput } from "@/components/ui/MontoInput";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import { saveVenta } from "@/lib/ventas/storage";
 import type { LineaVenta, MetodoPago, TipoIvaVenta } from "@/lib/ventas/types";
+import { MODALIDAD_LABEL, type ModalidadPeso } from "@/lib/inventario/types";
+import { PesoModal, type PesoModalProducto, type PesoModalResult } from "@/components/ventas/PesoModal";
 
 type EntidadBancaria = { id: string; codigo: string | null; nombre: string; tipo: string | null };
 
@@ -24,9 +26,18 @@ type ProductoHit = {
   stock_actual: number;
   imagen_url: string | null;
   tipo_iva: TipoIvaVenta;
+  // Peso: si controlado_por_peso=true, al agregar al carrito se abre PesoModal
+  // y la línea se marca con modalidad + precio_kg_display + unidad='KG'.
+  controlado_por_peso: boolean;
+  modalidades_activas: ModalidadPeso[];
+  precio_kg_entero: number | null;
+  precio_kg_recortado: number | null;
 };
 
 type CartItem = {
+  /** Key única de fila en el carrito (para React y para permitir varias pesadas
+   *  del mismo producto sin agruparse). NO se envía al server. */
+  cart_line_id: string;
   producto_id: string;
   producto_nombre: string;
   sku: string;
@@ -37,11 +48,25 @@ type CartItem = {
   precio_mayorista: number;     // precio unitario mayorista (0 si no aplica)
   cantidad_minima_mayorista: number | null;
   tipo_iva: TipoIvaVenta;
+  // Peso — undefined en items por unidad. Cuando modalidad viene, precio_venta
+  // guarda directamente el precio/kg elegido y unidad_venta = 'KG'.
+  modalidad?: ModalidadPeso;
+  unidad_venta?: string;
+  controlado_por_peso?: boolean;
 };
+
+/** Contador simple para cart_line_id (no necesita crypto para uniqueness dentro de la sesión). */
+let cartLineSeq = 0;
+function nextCartLineId(): string {
+  cartLineSeq += 1;
+  return `cli_${cartLineSeq}`;
+}
 
 /** Mapea la fila que devuelve /api/productos/search a un hit del POS. */
 function toHit(p: Record<string, unknown>): ProductoHit {
   const iva = p.tipo_iva;
+  const modalidadesRaw = Array.isArray(p.modalidades_activas) ? p.modalidades_activas : [];
+  const modalidades = modalidadesRaw.filter((m): m is ModalidadPeso => m === "entero" || m === "recortado");
   return {
     id: String(p.id),
     nombre: String(p.nombre ?? ""),
@@ -54,6 +79,10 @@ function toHit(p: Record<string, unknown>): ProductoHit {
     stock_actual: Number(p.stock_actual) || 0,
     imagen_url: (p.imagen_url as string | null) ?? null,
     tipo_iva: (iva === "EXENTA" || iva === "5%" ? iva : "10%") as TipoIvaVenta,
+    controlado_por_peso: p.controlado_por_peso === true,
+    modalidades_activas: modalidades,
+    precio_kg_entero: p.precio_kg_entero != null ? Number(p.precio_kg_entero) : null,
+    precio_kg_recortado: p.precio_kg_recortado != null ? Number(p.precio_kg_recortado) : null,
   };
 }
 
@@ -245,8 +274,35 @@ export default function CajaPage() {
     return () => { cancel = true; clearTimeout(t); };
   }, [q]);
 
+  // Estado del modal de peso: se abre cuando addToCart recibe un hit
+  // controlado_por_peso, y se cierra al confirmar o cancelar.
+  const [pesoProducto, setPesoProducto] = useState<PesoModalProducto | null>(null);
+
   const addToCart = useCallback((p: ProductoHit) => {
+    // Productos por peso: no se puede agregar con cantidad=1 (no tiene sentido).
+    // Se abre el modal, y la confirmación del modal cablea agregarConPeso().
+    if (p.controlado_por_peso) {
+      if (p.modalidades_activas.length === 0) {
+        // Producto mal configurado: activó controlado_por_peso pero no tiene
+        // ninguna modalidad. Se ignora silenciosamente en vez de romper la caja.
+        console.warn("[POS] producto por peso sin modalidades activas", p.id);
+        return;
+      }
+      setPesoProducto({
+        id: p.id,
+        sku: p.sku,
+        nombre: p.nombre,
+        stock_actual: p.stock_actual,
+        modalidades_activas: p.modalidades_activas,
+        precio_kg_entero: p.precio_kg_entero,
+        precio_kg_recortado: p.precio_kg_recortado,
+      });
+      setQ("");
+      setHits([]);
+      return;
+    }
     const item: CartItem = {
+      cart_line_id: nextCartLineId(),
       producto_id: p.id,
       producto_nombre: p.nombre,
       sku: p.sku,
@@ -259,8 +315,9 @@ export default function CajaPage() {
       tipo_iva: p.tipo_iva,
     };
     setCart((prev) => {
-      const ex = prev.find((x) => x.producto_id === p.id);
-      if (ex) return prev.map((x) => x.producto_id === p.id ? { ...x, cantidad: x.cantidad + 1 } : x);
+      // Solo agrupar items por unidad (mismo producto_id sin modalidad).
+      const ex = prev.find((x) => x.producto_id === p.id && !x.controlado_por_peso);
+      if (ex) return prev.map((x) => x.cart_line_id === ex.cart_line_id ? { ...x, cantidad: x.cantidad + 1 } : x);
       return [...prev, item];
     });
     setUltimoAgregado(item);
@@ -268,6 +325,36 @@ export default function CajaPage() {
     setHits([]);
     inputRef.current?.focus();
   }, []);
+
+  const agregarConPeso = useCallback((result: PesoModalResult) => {
+    if (!pesoProducto) return;
+    const item: CartItem = {
+      cart_line_id: nextCartLineId(),
+      producto_id: pesoProducto.id,
+      producto_nombre: pesoProducto.nombre,
+      sku: pesoProducto.sku,
+      imagen_url: null,
+      stock_actual: pesoProducto.stock_actual,
+      // Para productos por peso: cantidad = peso en kg, precio_venta = precio/kg.
+      // NO hay mayorista (no aplica al modelo por peso).
+      cantidad: result.peso,
+      precio_venta: result.precioKg,
+      precio_mayorista: 0,
+      cantidad_minima_mayorista: null,
+      tipo_iva: "10%",
+      modalidad: result.modalidad,
+      unidad_venta: "KG",
+      controlado_por_peso: true,
+    };
+    // Cada pesada es una línea distinta (no se agrupan) para que el ticket
+    // muestre exactamente lo que se pesó. Al no compartir cart_line_id, el
+    // agrupador de addToCart no las une. El server las suma correctamente
+    // en el descuento de stock atómico.
+    setCart((prev) => [...prev, item]);
+    setUltimoAgregado(item);
+    setPesoProducto(null);
+    inputRef.current?.focus();
+  }, [pesoProducto]);
 
   async function asociarYAgregar(prod: ProductoHit) {
     setAsociarGuardando(true);
@@ -313,12 +400,15 @@ export default function CajaPage() {
     }
   }, [q, hits, addToCart]);
 
-  const updateCant = (id: string, cant: number) => {
-    setCart((prev) => prev.map((x) => x.producto_id === id ? { ...x, cantidad: Math.max(1, cant) } : x));
+  const updateCant = (cartLineId: string, cant: number) => {
+    // Items por unidad: mínimo 1 y enteros (parseInt del caller).
+    // Items por peso: se editan desde el PesoModal (no desde el carrito) —
+    // este handler solo se usa para +/-/input numérico de unidades.
+    setCart((prev) => prev.map((x) => x.cart_line_id === cartLineId ? { ...x, cantidad: Math.max(1, cant) } : x));
   };
-  const removeFromCart = (id: string) => {
-    setCart((prev) => prev.filter((x) => x.producto_id !== id));
-    setUltimoAgregado((u) => (u && u.producto_id === id ? null : u));
+  const removeFromCart = (cartLineId: string) => {
+    setCart((prev) => prev.filter((x) => x.cart_line_id !== cartLineId));
+    setUltimoAgregado((u) => (u && u.cart_line_id === cartLineId ? null : u));
   };
   const vaciarCarrito = () => { setCart([]); setUltimoAgregado(null); };
 
@@ -347,6 +437,7 @@ export default function CajaPage() {
         const precio = precioEfectivo(it);
         const totalLinea = it.cantidad * precio;
         const montoIva = calcIva(it.tipo_iva, totalLinea);
+        const esPeso = it.controlado_por_peso === true && !!it.modalidad;
         return {
           producto_id: it.producto_id,
           producto_nombre: it.producto_nombre,
@@ -355,10 +446,16 @@ export default function CajaPage() {
           precio_venta_original: precio,
           precio_venta: precio,
           tipo_iva: it.tipo_iva,
-          tipo_precio: esMayoristaAplicado(it) ? "mayorista" : "minorista",
+          // Peso: no aplica el toggle mayorista (esMayoristaAplicado devuelve
+          // false porque precio_mayorista=0), pero blindamos con la guarda.
+          tipo_precio: !esPeso && esMayoristaAplicado(it) ? "mayorista" : "minorista",
           subtotal: totalLinea - montoIva,
           monto_iva: montoIva,
           total_linea: totalLinea,
+          // Metadatos de peso — llegan a ventas_items via /api/ventas/create.
+          modalidad: esPeso ? it.modalidad : undefined,
+          unidad_venta: esPeso ? (it.unidad_venta ?? "KG") : undefined,
+          precio_unitario_display: esPeso ? precio : undefined,
         };
       });
       const totalVenta = items.reduce((s, it) => s + it.total_linea, 0);
@@ -553,8 +650,13 @@ export default function CajaPage() {
                 </div>
               ) : (
                 <ul className="space-y-2">
-                  {cart.map((it) => (
-                    <li key={it.producto_id} className="rounded-xl border border-slate-200 bg-slate-50/40 p-3">
+                  {cart.map((it) => {
+                    const esPeso = it.controlado_por_peso === true && !!it.modalidad;
+                    const pesoLabel = esPeso
+                      ? `${it.cantidad.toLocaleString("es-PY", { minimumFractionDigits: 0, maximumFractionDigits: 3 })} kg`
+                      : null;
+                    return (
+                    <li key={it.cart_line_id} className="rounded-xl border border-slate-200 bg-slate-50/40 p-3">
                       <div className="flex items-start gap-3">
                         <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white">
                           {it.imagen_url ? (
@@ -568,43 +670,66 @@ export default function CajaPage() {
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-1.5">
-                            <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">{it.producto_nombre}</p>
-                            {esMayoristaAplicado(it) && (
+                            <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">
+                              {it.producto_nombre}
+                              {esPeso && it.modalidad && (
+                                <span className="ml-1 text-slate-600 font-normal">· {MODALIDAD_LABEL[it.modalidad]}</span>
+                              )}
+                            </p>
+                            {!esPeso && esMayoristaAplicado(it) && (
                               <span className="rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700">
                                 Mayorista
+                              </span>
+                            )}
+                            {esPeso && (
+                              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                                Por peso
                               </span>
                             )}
                           </div>
                           <p className="font-mono text-[11px] text-slate-500">
                             {it.sku}
                             {" · "}
-                            {formatGs(precioEfectivo(it))} c/u
-                            {!esMayoristaAplicado(it) && it.precio_mayorista > 0 && it.precio_mayorista !== it.precio_venta && it.cantidad_minima_mayorista != null && it.cantidad_minima_mayorista > 0 && (
+                            {esPeso
+                              ? `${pesoLabel} × ${formatGs(it.precio_venta)}/kg`
+                              : `${formatGs(precioEfectivo(it))} c/u`}
+                            {!esPeso && !esMayoristaAplicado(it) && it.precio_mayorista > 0 && it.precio_mayorista !== it.precio_venta && it.cantidad_minima_mayorista != null && it.cantidad_minima_mayorista > 0 && (
                               <span className="ml-1 text-indigo-500">
                                 (desde {it.cantidad_minima_mayorista} u → {formatGs(it.precio_mayorista)})
                               </span>
                             )}
                           </p>
                           <div className="mt-2 flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => updateCant(it.producto_id, it.cantidad - 1)}
-                              className="h-7 w-7 rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                              aria-label="Menos"
-                            >−</button>
-                            <input
-                              type="number"
-                              min={1}
-                              value={it.cantidad}
-                              onChange={(e) => updateCant(it.producto_id, parseInt(e.target.value) || 1)}
-                              className="h-7 w-14 rounded-md border border-slate-200 bg-white text-center text-sm tabular-nums"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => updateCant(it.producto_id, it.cantidad + 1)}
-                              className="h-7 w-7 rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                              aria-label="Más"
-                            >+</button>
+                            {esPeso ? (
+                              // Item por peso: no se edita cantidad desde el
+                              // carrito (perdería el sentido del peso pesado).
+                              // Para cambiar, se quita y se pesa de nuevo.
+                              <span className="text-xs text-slate-500">
+                                Peso fijado al agregar. Quitar y pesar de nuevo para cambiarlo.
+                              </span>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => updateCant(it.cart_line_id, it.cantidad - 1)}
+                                  className="h-7 w-7 rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                                  aria-label="Menos"
+                                >−</button>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={it.cantidad}
+                                  onChange={(e) => updateCant(it.cart_line_id, parseInt(e.target.value) || 1)}
+                                  className="h-7 w-14 rounded-md border border-slate-200 bg-white text-center text-sm tabular-nums"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => updateCant(it.cart_line_id, it.cantidad + 1)}
+                                  className="h-7 w-7 rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                                  aria-label="Más"
+                                >+</button>
+                              </>
+                            )}
                             <span className="ml-auto text-sm font-semibold tabular-nums text-slate-900">
                               {formatGs(it.cantidad * precioEfectivo(it))}
                             </span>
@@ -612,7 +737,7 @@ export default function CajaPage() {
                         </div>
                         <button
                           type="button"
-                          onClick={() => removeFromCart(it.producto_id)}
+                          onClick={() => removeFromCart(it.cart_line_id)}
                           className="text-slate-400 hover:text-rose-500"
                           aria-label="Quitar"
                         >
@@ -620,7 +745,8 @@ export default function CajaPage() {
                         </button>
                       </div>
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               )}
             </div>
@@ -949,6 +1075,12 @@ export default function CajaPage() {
           </div>
         </div>
       )}
+
+      <PesoModal
+        producto={pesoProducto}
+        onCancel={() => setPesoProducto(null)}
+        onConfirm={agregarConPeso}
+      />
     </div>
   );
 }

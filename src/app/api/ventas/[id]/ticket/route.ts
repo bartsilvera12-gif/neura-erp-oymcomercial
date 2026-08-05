@@ -159,6 +159,21 @@ interface ItemRow {
   cantidad: number | string;
   precio_venta: number | string;
   total_linea: number | string;
+  /** Metadatos de venta por peso (nullables). */
+  modalidad?: string | null;
+  unidad_venta?: string | null;
+  precio_unitario_display?: number | string | null;
+}
+
+const MODALIDAD_LABEL_TICKET: Record<string, string> = {
+  entero: "Entero",
+  recortado: "Recortado",
+};
+
+/** Formatea un número con hasta 3 decimales para pesos (kg) preservando la
+ *  precisión que se ingresó en el POS. */
+function formatCantidad(n: number): string {
+  return n.toLocaleString("es-PY", { minimumFractionDigits: 0, maximumFractionDigits: 3 });
 }
 
 type EnrichedItem = ItemRow & { sector: Sector };
@@ -189,25 +204,42 @@ function renderCopia(opts: {
   const modalidad = modalidadLabel(brief?.modalidad);
 
   // Filas de ítems: en cliente todas; en cocina todas también, pero las del propio sector destacadas.
+  // Formato distinto para productos por peso:
+  //   Por unidad → "2× PRODUCTO                    Gs. 20.000"
+  //                   "2 × Gs. 10.000"
+  //   Por peso   → "PRODUCTO — Recortado           Gs. 16.800"
+  //                   "0,350 KG × Gs. 48.000/KG"
   const itemsHtml = items
     .map((it) => {
       const cant = Number(it.cantidad);
-      const punit = Number(it.precio_venta);
+      const punit = Number(it.precio_unitario_display ?? it.precio_venta);
       const sub = Number(it.total_linea);
       const matchesSector =
         (tipo === "pizzeria" && it.sector === "pizzeria") ||
         (tipo === "plancha" && it.sector === "plancha");
       const cls = matchesSector ? "match" : tipo === "cliente" ? "" : "muted";
+      const esPeso = typeof it.modalidad === "string" && it.modalidad.length > 0;
+      const modalidadTxt = esPeso ? (MODALIDAD_LABEL_TICKET[it.modalidad!] ?? it.modalidad) : "";
+      const unidad = esPeso ? (it.unidad_venta || "KG").toUpperCase() : "";
+      const nombreConModalidad = esPeso
+        ? `${escapeHtml(it.producto_nombre)} — ${escapeHtml(modalidadTxt!)}`
+        : escapeHtml(it.producto_nombre);
+      const qtyCell = esPeso
+        ? "" // el ticket de peso muestra cant/unit en la línea sub, no en la primera col
+        : `<strong>${cant}×</strong>`;
+      const subLine = esPeso
+        ? `${formatCantidad(cant)} ${escapeHtml(unidad)} × ${formatGs(punit)}/${escapeHtml(unidad)}`
+        : `${cant} × ${formatGs(punit)}`;
       const main = showPrices
         ? `<tr class="${cls}">
-             <td class="qty"><strong>${cant}×</strong></td>
-             <td class="name">${escapeHtml(it.producto_nombre)}</td>
+             <td class="qty">${qtyCell}</td>
+             <td class="name">${nombreConModalidad}</td>
              <td class="amt">${formatGs(sub)}</td>
            </tr>
-           <tr class="sub"><td></td><td colspan="2">${cant} × ${formatGs(punit)}</td></tr>`
+           <tr class="sub"><td></td><td colspan="2">${subLine}</td></tr>`
         : `<tr class="${cls}">
-             <td class="qty"><strong>${cant}×</strong></td>
-             <td class="name" colspan="2"><strong>${escapeHtml(it.producto_nombre)}</strong></td>
+             <td class="qty">${esPeso ? "" : `<strong>${cant}×</strong>`}</td>
+             <td class="name" colspan="2"><strong>${nombreConModalidad}</strong>${esPeso ? ` (${formatCantidad(cant)} ${escapeHtml(unidad)})` : ""}</td>
            </tr>`;
       return main;
     })
@@ -396,7 +428,7 @@ export async function GET(request: NextRequest, ctxParams: { params: Promise<{ i
   // Items
   const iQ = await ctx.supabase
     .from("ventas_items")
-    .select("producto_id, producto_nombre, sku, cantidad, precio_venta, total_linea")
+    .select("producto_id, producto_nombre, sku, cantidad, precio_venta, total_linea, modalidad, unidad_venta, precio_unitario_display")
     .eq("venta_id", id)
     .eq("empresa_id", empresaId);
   if (iQ.error) return new NextResponse(`Error items: ${iQ.error.message}`, { status: 500 });

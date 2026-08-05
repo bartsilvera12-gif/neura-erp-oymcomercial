@@ -16,7 +16,12 @@ const PRODUCTO_COLS =
   "codigo_barras, codigo_barras_interno, imagen_path, imagen_url, " +
   "categoria_principal_id, ubicacion_principal_id, proveedor_principal_id, " +
   "es_vendible, es_insumo, controla_stock, valorizado, unidad_compra, unidad_receta, " +
-  "factor_compra_receta, tiempo_prep_minutos, descripcion, precio_mayorista, cantidad_minima_mayorista, precio_distribuidor, modo_receta, tipo_iva";
+  "factor_compra_receta, tiempo_prep_minutos, descripcion, precio_mayorista, cantidad_minima_mayorista, precio_distribuidor, modo_receta, tipo_iva, " +
+  "controlado_por_peso, precio_kg_entero, precio_kg_recortado, modalidades_activas";
+
+/** Modalidades válidas para productos por peso. Debe coincidir con el CHECK
+ *  chk_productos_modalidades_validas de la migración de peso. */
+const MODALIDADES_VALIDAS: ReadonlySet<string> = new Set(["entero", "recortado"]);
 
 function toNumber(v: unknown): unknown {
   return typeof v === "string" ? Number(v) : v;
@@ -37,7 +42,60 @@ function rowToApi(r: Record<string, unknown>): Record<string, unknown> {
     precio_mayorista: r.precio_mayorista != null ? toNumber(r.precio_mayorista) : null,
     cantidad_minima_mayorista: r.cantidad_minima_mayorista != null ? toNumber(r.cantidad_minima_mayorista) : null,
     precio_distribuidor: r.precio_distribuidor != null ? toNumber(r.precio_distribuidor) : null,
+    controlado_por_peso: r.controlado_por_peso === true,
+    precio_kg_entero: r.precio_kg_entero != null ? toNumber(r.precio_kg_entero) : null,
+    precio_kg_recortado: r.precio_kg_recortado != null ? toNumber(r.precio_kg_recortado) : null,
+    modalidades_activas: Array.isArray(r.modalidades_activas) ? r.modalidades_activas : null,
   };
+}
+
+/** Valida y normaliza el bloque "controlado_por_peso" del body de un producto.
+ *  Devuelve { fields, error }: si error es string, la API responde 400 con ese
+ *  mensaje. Si error es null, `fields` es un parcial que se hace spread al
+ *  insertPayload / updatePayload de productos. */
+function parseWeightConfig(body: Record<string, unknown>): {
+  fields: Record<string, unknown>;
+  error: string | null;
+  forcedUnidadMedida: string | null;
+} {
+  const controlado = body.controlado_por_peso === true;
+  const fields: Record<string, unknown> = { controlado_por_peso: controlado };
+  if (!controlado) {
+    // Si viene apagado, se limpian todos los campos derivados (queda coherente
+    // aunque el producto haya sido "por peso" antes).
+    fields.precio_kg_entero = null;
+    fields.precio_kg_recortado = null;
+    fields.modalidades_activas = null;
+    return { fields, error: null, forcedUnidadMedida: null };
+  }
+
+  const raw = body.modalidades_activas;
+  const modalidades: string[] = Array.isArray(raw)
+    ? raw.filter((m): m is string => typeof m === "string" && MODALIDADES_VALIDAS.has(m))
+    : [];
+  if (modalidades.length === 0) {
+    return {
+      fields,
+      error: "Activá al menos una modalidad (entero o recortado) para el producto por peso.",
+      forcedUnidadMedida: null,
+    };
+  }
+
+  const precioEntero = toNumberOrNull(body.precio_kg_entero);
+  const precioRecortado = toNumberOrNull(body.precio_kg_recortado);
+  if (modalidades.includes("entero") && (precioEntero == null || precioEntero <= 0)) {
+    return { fields, error: "Cargá un precio por kg (entero) mayor a 0.", forcedUnidadMedida: null };
+  }
+  if (modalidades.includes("recortado") && (precioRecortado == null || precioRecortado <= 0)) {
+    return { fields, error: "Cargá un precio por kg (recortado/feteado) mayor a 0.", forcedUnidadMedida: null };
+  }
+
+  fields.precio_kg_entero = modalidades.includes("entero") ? precioEntero : null;
+  fields.precio_kg_recortado = modalidades.includes("recortado") ? precioRecortado : null;
+  fields.modalidades_activas = modalidades;
+  // El CHECK de la migración exige unidad_medida='KG' cuando controlado_por_peso=true.
+  // Se fuerza acá para que el usuario no se cruce con una constraint del DB.
+  return { fields, error: null, forcedUnidadMedida: "KG" };
 }
 
 async function existsId(
@@ -183,6 +241,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(errorResponse("El proveedor seleccionado no existe."), { status: 400 });
     }
 
+    // Configuración por peso — valida y (si corresponde) fuerza unidad_medida='KG'.
+    // Debe correr ANTES de armar insertPayload para poder sobreescribir la unidad.
+    const weight = parseWeightConfig(body);
+    if (weight.error) return NextResponse.json(errorResponse(weight.error), { status: 400 });
+    const unidadMedidaFinal = weight.forcedUnidadMedida ?? unidadMedida;
+
     // Insert principal
     const insertPayload: Record<string, unknown> = {
       empresa_id: empresaId,
@@ -193,8 +257,9 @@ export async function POST(request: NextRequest) {
       precio_venta: precioVenta,
       stock_actual: stockActual,
       stock_minimo: stockMinimo,
-      unidad_medida: unidadMedida,
+      unidad_medida: unidadMedidaFinal,
       metodo_valuacion: metodoValuacion,
+      ...weight.fields,
       codigo_barras: codigoBarras,
       codigo_barras_interno: codigoBarras ? codigoBarrasInterno : false,
       categoria_principal_id: categoriaPrincipalId,
