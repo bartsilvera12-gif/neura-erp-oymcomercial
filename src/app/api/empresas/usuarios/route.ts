@@ -38,7 +38,9 @@ export async function GET(request: Request) {
     // Se cuenta acá con los mismos criterios que el guard de alta (POST /nuevo)
     // para que el chip refleje exactamente lo que va a validar el server: el
     // admin logueado también cuenta.
-    const activos = (usuarios ?? []).filter((u) => (u.estado ?? "") === "activo").length;
+    const activos = ((usuarios ?? []) as Array<{ estado: string | null }>).filter(
+      (u) => (u.estado ?? "") === "activo"
+    ).length;
 
     return NextResponse.json({
       usuarios: usuarios ?? [],
