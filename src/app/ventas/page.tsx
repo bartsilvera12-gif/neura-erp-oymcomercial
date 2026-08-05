@@ -574,7 +574,13 @@ export default function CajaPage() {
         return;
       }
       const v = res.venta;
-      try { window.open(`/api/ventas/${v.id}/ticket?auto=1`, "_blank", "noopener"); } catch {}
+      // Cuando el cajero eligió "Factura", abrimos la vista de talonario
+      // (autocompletado sobre el papel físico pre-impreso Epson matricial).
+      // "Solo ticket" sigue abriendo el ticket térmico como comprobante interno.
+      const rutaImpresion = datosVenta.documento === "factura"
+        ? `/api/ventas/${v.id}/talonario?auto=1`
+        : `/api/ventas/${v.id}/ticket?auto=1`;
+      try { window.open(rutaImpresion, "_blank", "noopener"); } catch {}
       setVentaOk(v.numero_control);
       setCobroOpen(false);
       vaciarCarrito();
