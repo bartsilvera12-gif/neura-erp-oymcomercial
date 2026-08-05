@@ -11,6 +11,8 @@ import type { LineaVenta, MetodoPago, TipoIvaVenta } from "@/lib/ventas/types";
 import { MODALIDAD_LABEL, type ModalidadPeso } from "@/lib/inventario/types";
 import { PesoModal, type PesoModalProducto, type PesoModalResult } from "@/components/ventas/PesoModal";
 import { DatosVentaHeader, datosVentaErrors, emptyDatosVenta, type DatosVentaState } from "@/components/ventas/DatosVentaHeader";
+import { PedidosCajaPanel } from "@/components/ventas/PedidosCajaPanel";
+import type { PedidoCaja } from "@/lib/pedidos-caja/types";
 
 type EntidadBancaria = { id: string; codigo: string | null; nombre: string; tipo: string | null };
 
@@ -284,6 +286,11 @@ export default function CajaPage() {
   // limpia (contado + solo ticket, sin cliente).
   const [datosVenta, setDatosVenta] = useState<DatosVentaState>(emptyDatosVenta());
 
+  // Pedido de la cola de Caja que se está cobrando actualmente (si el cajero
+  // eligió uno del panel "Pedidos por cobrar"). Al confirmar la venta, el
+  // server lo marca como facturado usando este id.
+  const [pedidoCajaActivo, setPedidoCajaActivo] = useState<PedidoCaja | null>(null);
+
   const addToCart = useCallback((p: ProductoHit) => {
     // Productos por peso: no se puede agregar con cantidad=1 (no tiene sentido).
     // Se abre el modal, y la confirmación del modal cablea agregarConPeso().
@@ -416,7 +423,59 @@ export default function CajaPage() {
     setCart((prev) => prev.filter((x) => x.cart_line_id !== cartLineId));
     setUltimoAgregado((u) => (u && u.cart_line_id === cartLineId ? null : u));
   };
-  const vaciarCarrito = () => { setCart([]); setUltimoAgregado(null); };
+  const vaciarCarrito = () => { setCart([]); setUltimoAgregado(null); setPedidoCajaActivo(null); };
+
+  /** Toma un pedido de la cola y lo carga como carrito del POS. Si ya había
+   *  items en el carrito, se reemplazan (el pedido es el nuevo contexto).
+   *  Autocompleta razón social / RUC del pedido si vienen. */
+  const cargarPedidoAlCarrito = useCallback(async (p: PedidoCaja) => {
+    // Los items del pedido no traen stock_actual ni cantidad_minima_mayorista
+    // ni imagen_url — se rehidratan en el momento del cobro con las mejores
+    // estimaciones (mayorista queda desactivado; el precio ya es el que el
+    // vendedor pactó). Si el vendedor puso una modalidad de peso, se preserva.
+    const nuevosItems: CartItem[] = p.items.map((it) => {
+      const cantNum = Number(it.cantidad) || 0;
+      const precioNum = Number(it.precio_venta) || 0;
+      const tipoIva: TipoIvaVenta =
+        it.tipo_iva === "EXENTA" || it.tipo_iva === "5%" ? it.tipo_iva : "10%";
+      return {
+        cart_line_id: nextCartLineId(),
+        producto_id: it.producto_id,
+        producto_nombre: it.producto_nombre,
+        sku: it.sku ?? "",
+        imagen_url: null,
+        stock_actual: 0,
+        cantidad: cantNum,
+        precio_venta: precioNum,
+        precio_mayorista: 0,
+        cantidad_minima_mayorista: null,
+        tipo_iva: tipoIva,
+      };
+    });
+    setCart(nuevosItems);
+    setPedidoCajaActivo(p);
+    setUltimoAgregado(nuevosItems[nuevosItems.length - 1] ?? null);
+    // Autocompletar datos de venta con los del pedido — sin sobrescribir lo
+    // que ya haya tipeado el cajero.
+    setDatosVenta((prev) => ({
+      ...prev,
+      razonSocial: prev.razonSocial || p.cliente_nombre || "",
+    }));
+    inputRef.current?.focus();
+  }, []);
+
+  /** Libera el pedido activo (vuelve al vendedor, sale de la cola). Se llama
+   *  cuando el cajero decide cancelar el cobro sin facturarlo. */
+  const liberarPedidoActivo = useCallback(async () => {
+    if (!pedidoCajaActivo) return;
+    try {
+      await fetchWithSupabaseSession(`/api/pedidos-caja/${pedidoCajaActivo.id}/liberar`, { method: "POST" });
+    } catch (e) {
+      console.error("[POS] liberar pedido fallo:", e);
+    }
+    setPedidoCajaActivo(null);
+    vaciarCarrito();
+  }, [pedidoCajaActivo]);
 
   const total = useMemo(() => cart.reduce((s, it) => s + it.cantidad * precioEfectivo(it), 0), [cart]);
   const cantTotal = useMemo(() => cart.reduce((s, it) => s + it.cantidad, 0), [cart]);
@@ -505,7 +564,11 @@ export default function CajaPage() {
         // 'Factura' arriba dispara el puente venta→factura ERP + SIFEN.
         // 'Solo ticket' registra la venta e imprime comanda, sin factura.
         emitir_factura: datosVenta.documento === "factura",
-      }, undefined, pagoDetalle);
+      }, undefined, pagoDetalle, {
+        // Si el cajero eligió cobrar desde el panel Pedidos por cobrar, el
+        // server marca el pedido como facturado post-venta (idempotente).
+        pedidoCajaId: pedidoCajaActivo?.id ?? null,
+      });
       if (!res.success) {
         setCobroError(res.error);
         return;
@@ -515,6 +578,10 @@ export default function CajaPage() {
       setVentaOk(v.numero_control);
       setCobroOpen(false);
       vaciarCarrito();
+      // vaciarCarrito ya limpia pedidoCajaActivo, pero por explicitud —
+      // si el flujo cambia mañana, este set queda como documentación de que
+      // el pedido termina "consumido" al facturar.
+      setPedidoCajaActivo(null);
       // Volver a defaults (contado + solo ticket + sin cliente) para no
       // arrastrar los datos de la venta anterior a la próxima.
       setDatosVenta(emptyDatosVenta());
@@ -586,6 +653,36 @@ export default function CajaPage() {
             Se muestran siempre para que el vendedor pueda dejar el flag de
             factura o crédito seteado antes de escanear el primer producto. */}
         <DatosVentaHeader value={datosVenta} onChange={setDatosVenta} />
+
+        {/* Cola de pedidos armados por vendedores. Al elegir "Cobrar" carga
+            los items al carrito y marca el pedido como en_caja. */}
+        <PedidosCajaPanel
+          onCobrar={cargarPedidoAlCarrito}
+          pedidoActivoId={pedidoCajaActivo?.id ?? null}
+        />
+
+        {/* Aviso persistente cuando hay un pedido siendo cobrado: le da al
+            cajero forma de identificar el contexto y liberar si eligió mal. */}
+        {pedidoCajaActivo && (
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-[#4FAEB2]/40 bg-[#4FAEB2]/[0.08] px-4 py-2.5">
+            <div className="min-w-0 text-sm text-slate-800">
+              Estás cobrando el pedido{" "}
+              <span className="font-semibold">{pedidoCajaActivo.numero ?? "sin número"}</span>
+              {pedidoCajaActivo.cliente_nombre && (
+                <span className="text-slate-600"> · {pedidoCajaActivo.cliente_nombre}</span>
+              )}
+              . Al confirmar la venta se marca como facturado.
+            </div>
+            <button
+              type="button"
+              onClick={() => void liberarPedidoActivo()}
+              className="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+              title="Devuelve el pedido al vendedor y vacía el carrito"
+            >
+              Liberar
+            </button>
+          </div>
+        )}
         <div className="grid gap-4 lg:grid-cols-[1fr_460px] lg:min-h-[540px]">
           {/* PANEL IZQUIERDO: buscador + carrito */}
           <div className="flex flex-col rounded-2xl border border-slate-200 bg-white shadow-sm">
