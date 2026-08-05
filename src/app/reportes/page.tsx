@@ -2,7 +2,7 @@
 
 import PageHeader from "@/components/ui/PageHeader";
 import { ReportCard } from "@/components/reportes/ReportCard";
-import { Wallet, Truck, Package, ShoppingCart, ArrowLeftRight, Building2 } from "lucide-react";
+import { Wallet, Truck, Package, ShoppingCart, ArrowLeftRight, Building2, AlertTriangle } from "lucide-react";
 
 /** Hub de reportería operativa (Fase 1: Estado de cuenta + Proveedores). */
 export default function ReportesPage() {
@@ -67,6 +67,15 @@ export default function ReportesPage() {
             icon={ArrowLeftRight}
             description="Detalle de cobro por venta (efectivo/transferencia/tarjeta), por método y por entidad."
             href="/reportes/conciliacion"
+          />
+        </li>
+        <li>
+          <ReportCard
+            title="Mermas y consumo interno"
+            subtitle="Peso perdido en pesaje / cortes"
+            icon={AlertTriangle}
+            description="Detalle y totales de peso descartado (merma) y usado internamente durante operaciones de pesaje / cortes, con ranking de productos con más pérdida."
+            href="/reportes/mermas"
           />
         </li>
       </ul>

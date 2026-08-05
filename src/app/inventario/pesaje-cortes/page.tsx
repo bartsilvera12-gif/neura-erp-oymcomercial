@@ -266,12 +266,20 @@ export default function PesajeCortesPage() {
             recorte vendible, merma y consumo interno.
           </p>
         </div>
-        <Link
-          href="/inventario"
-          className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-        >
-          Volver a Inventario
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/reportes/mermas"
+            className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+          >
+            Reporte de mermas →
+          </Link>
+          <Link
+            href="/inventario"
+            className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+          >
+            Volver a Inventario
+          </Link>
+        </div>
       </div>
 
       {productosPeso.length === 0 && !cargandoProductos && (
