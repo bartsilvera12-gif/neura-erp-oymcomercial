@@ -222,6 +222,22 @@ function UsuarioDetailContent() {
       }));
       return;
     }
+    // Checkboxes de Vistas del dashboard — mismo patrón que módulos: name es
+    // "dash_<id>", value el id, y se agrega/quita del array dashboard_view_ids.
+    // Antes de este handler, caían en la rama genérica y seteaban
+    // `form.dash_<id> = true` en vez de mover el array, por eso el checkbox
+    // no se marcaba en pantalla.
+    if (type === "checkbox" && name.startsWith("dash_")) {
+      const vid = (e.target as HTMLInputElement).value;
+      const checked = (e.target as HTMLInputElement).checked;
+      setForm((prev) => ({
+        ...prev,
+        dashboard_view_ids: checked
+          ? [...prev.dashboard_view_ids, vid]
+          : prev.dashboard_view_ids.filter((x) => x !== vid),
+      }));
+      return;
+    }
     if (type === "checkbox") {
       setForm((prev) => ({ ...prev, [name]: (e.target as HTMLInputElement).checked }));
       return;
