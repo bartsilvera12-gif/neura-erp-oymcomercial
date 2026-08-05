@@ -128,6 +128,11 @@ const MENU_STRUCTURE: MenuItem[] = [
     { label: "Productos", href: "/inventario" },
     { label: "Movimientos", href: "/inventario/movimientos" },
     { label: "Categorías", href: "/inventario/categorias" },
+    // Sub-item de Inventario: no requiere slug propio en empresa_modulos.
+    // Acceso: quien tenga acceso a Inventario ve el link, pero el endpoint
+    // POST filtra por rol admin (los operativos ven el link solo para
+    // consulta si algún día habilitamos GET aparte).
+    { label: "Pesaje / Cortes", href: "/inventario/pesaje-cortes" },
     // "Depósitos / Ubicaciones" oculto en instancia En lo de Mari (no aplica para gastronomía).
   ]},
   // Módulo propio (no hijo de Inventario): un `usuario` puede tener acceso a
