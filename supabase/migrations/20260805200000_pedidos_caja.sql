@@ -91,23 +91,17 @@ CREATE TRIGGER pedidos_caja_touch
   EXECUTE FUNCTION oymcomercial.touch_pedidos_caja_updated_at();
 
 -- RLS + GRANT --------------------------------------------------------------
+--
+-- Mismo patrón que compras_pagos (20260731180000): RLS habilitado sin
+-- policies, y GRANT únicamente a service_role. El backend usa service_role
+-- (bypass RLS), y ninguna sesión de PostgREST del cliente puede leer/escribir.
+--
+-- Se descarta el patrón de policies con `puede_acceder_empresa(uuid)` porque
+-- esa función vive en `public` (flota central multi-tenant) y NO existe en
+-- esta instancia monocliente `oymcomercial`. El aislamiento por empresa se
+-- garantiza en el server (`ctx.auth.empresa_id` en todos los endpoints).
 
 ALTER TABLE oymcomercial.pedidos_caja ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS pedidos_caja_select ON oymcomercial.pedidos_caja;
-DROP POLICY IF EXISTS pedidos_caja_insert ON oymcomercial.pedidos_caja;
-DROP POLICY IF EXISTS pedidos_caja_update ON oymcomercial.pedidos_caja;
-DROP POLICY IF EXISTS pedidos_caja_delete ON oymcomercial.pedidos_caja;
-
-CREATE POLICY pedidos_caja_select ON oymcomercial.pedidos_caja
-  FOR SELECT USING (public.puede_acceder_empresa(empresa_id));
-CREATE POLICY pedidos_caja_insert ON oymcomercial.pedidos_caja
-  FOR INSERT WITH CHECK (public.puede_acceder_empresa(empresa_id));
-CREATE POLICY pedidos_caja_update ON oymcomercial.pedidos_caja
-  FOR UPDATE USING (public.puede_acceder_empresa(empresa_id))
-  WITH CHECK (public.puede_acceder_empresa(empresa_id));
-CREATE POLICY pedidos_caja_delete ON oymcomercial.pedidos_caja
-  FOR DELETE USING (public.puede_acceder_empresa(empresa_id));
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON oymcomercial.pedidos_caja TO service_role;
 
