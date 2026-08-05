@@ -909,7 +909,7 @@ export default function NuevaVentaPage() {
               <SegmentedControl<"ticket" | "factura">
                 value={tipoDocumento}
                 options={[
-                  { value: "factura", label: "Factura electrónica" },
+                  { value: "factura", label: "Factura" },
                   { value: "ticket", label: "Solo ticket" },
                 ]}
                 onChange={(v) => setTipoDocumento(v)}
