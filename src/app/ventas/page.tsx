@@ -10,6 +10,7 @@ import { saveVenta } from "@/lib/ventas/storage";
 import type { LineaVenta, MetodoPago, TipoIvaVenta } from "@/lib/ventas/types";
 import { MODALIDAD_LABEL, type ModalidadPeso } from "@/lib/inventario/types";
 import { PesoModal, type PesoModalProducto, type PesoModalResult } from "@/components/ventas/PesoModal";
+import { DatosVentaHeader, datosVentaErrors, emptyDatosVenta, type DatosVentaState } from "@/components/ventas/DatosVentaHeader";
 
 type EntidadBancaria = { id: string; codigo: string | null; nombre: string; tipo: string | null };
 
@@ -278,6 +279,11 @@ export default function CajaPage() {
   // controlado_por_peso, y se cierra al confirmar o cancelar.
   const [pesoProducto, setPesoProducto] = useState<PesoModalProducto | null>(null);
 
+  // Datos de la venta (cliente + condición + documento) — bloque arriba del POS.
+  // Se resetea después de cada cobro exitoso para que la próxima venta arranque
+  // limpia (contado + solo ticket, sin cliente).
+  const [datosVenta, setDatosVenta] = useState<DatosVentaState>(emptyDatosVenta());
+
   const addToCart = useCallback((p: ProductoHit) => {
     // Productos por peso: no se puede agregar con cantidad=1 (no tiene sentido).
     // Se abre el modal, y la confirmación del modal cablea agregarConPeso().
@@ -471,6 +477,16 @@ export default function CajaPage() {
             fecha_acreditacion: fechaAcreditacion || null,
           };
 
+      // Guard cliente-side: si la selección arriba no es válida, no llegamos
+      // al server (que rechazaría). Muestra el mismo mensaje que el header.
+      const dvErr = datosVentaErrors(datosVenta);
+      if (dvErr) {
+        setCobroError(dvErr);
+        return;
+      }
+      const plazoDiasNum = datosVenta.condicion === "CREDITO"
+        ? Math.max(1, Number(datosVenta.plazoDias) || 1)
+        : 0;
       const res = await saveVenta({
         items,
         moneda: "GS",
@@ -478,12 +494,13 @@ export default function CajaPage() {
         subtotal: totalVenta - ivaVenta,
         monto_iva: ivaVenta,
         total: totalVenta,
-        tipo_venta: "CONTADO",
+        tipo_venta: datosVenta.condicion,
+        plazo_dias: plazoDiasNum,
         metodo_pago: metodo,
-        cliente_id: null,
-        // El POS cobra al mostrador, sin cliente identificado, y la factura
-        // electrónica lo exige. Sale ticket; para facturar se usa Nueva venta.
-        emitir_factura: false,
+        cliente_id: datosVenta.clienteId,
+        // 'Factura' arriba dispara el puente venta→factura ERP + SIFEN.
+        // 'Solo ticket' registra la venta e imprime comanda, sin factura.
+        emitir_factura: datosVenta.documento === "factura",
       }, undefined, pagoDetalle);
       if (!res.success) {
         setCobroError(res.error);
@@ -494,6 +511,9 @@ export default function CajaPage() {
       setVentaOk(v.numero_control);
       setCobroOpen(false);
       vaciarCarrito();
+      // Volver a defaults (contado + solo ticket + sin cliente) para no
+      // arrastrar los datos de la venta anterior a la próxima.
+      setDatosVenta(emptyDatosVenta());
       setRefreshCajaTick((n) => n + 1);
       setTimeout(() => setVentaOk(null), 3500);
       inputRef.current?.focus();
@@ -557,6 +577,11 @@ export default function CajaPage() {
           Abrí la caja para empezar a cobrar.
         </div>
       ) : (
+        <>
+        {/* Datos de la venta arriba (cliente / condicion / documento).
+            Se muestran siempre para que el vendedor pueda dejar el flag de
+            factura o crédito seteado antes de escanear el primer producto. */}
+        <DatosVentaHeader value={datosVenta} onChange={setDatosVenta} />
         <div className="grid gap-4 lg:grid-cols-[1fr_460px] lg:min-h-[540px]">
           {/* PANEL IZQUIERDO: buscador + carrito */}
           <div className="flex flex-col rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -822,6 +847,7 @@ export default function CajaPage() {
             </div>
           </div>
         </div>
+        </>
       )}
 
       {/* Modal de cobro */}
