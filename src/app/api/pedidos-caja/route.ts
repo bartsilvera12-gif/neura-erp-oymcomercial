@@ -49,6 +49,10 @@ export async function GET(request: NextRequest) {
     const mios = url.searchParams.get("mios") === "1";
     const qText = (url.searchParams.get("q") ?? "").trim();
     const limit = Math.max(1, Math.min(500, Number(url.searchParams.get("limit") ?? 200) || 200));
+    // Filtro adicional para la vista Caja: excluye pedidos "liberados"
+    // (volvieron al vendedor y no deben aparecer en la cola de cobro).
+    // Valores esperados: "true" | "false"; ausente = no filtra.
+    const enColaParam = url.searchParams.get("en_cola");
 
     // Filtro por sucursal actual — cada sucursal tiene sus propios pedidos.
     let q = aplicarFiltroSucursal(
@@ -62,6 +66,8 @@ export async function GET(request: NextRequest) {
       .limit(limit);
 
     if (estadoParam !== "todos") q = q.eq("estado", estadoParam);
+    if (enColaParam === "true") q = q.eq("en_cola_caja", true);
+    else if (enColaParam === "false") q = q.eq("en_cola_caja", false);
     if (mios && auth.usuarioCatalogId) q = q.eq("armado_por_id", auth.usuarioCatalogId);
     if (qText.length > 0) {
       const safe = qText.replace(/,/g, "").replace(/\(/g, "").replace(/\)/g, "");

@@ -184,20 +184,38 @@ export async function POST(request: NextRequest) {
     //  - emitir_factura=true sin cliente: SIFEN exige receptor; se descontaba
     //    stock y creaba la venta antes de que el puente venta→factura fallara
     //    (o peor, generara una FAC-XXXXXX sin razón social/RUC).
-    if (tipoVenta === "CREDITO" && !clienteId) {
+    // Cliente ad-hoc — POS de Caja permite facturar sin ficha en el catálogo:
+    // alcanza con la razón social (obligatoria en factura y crédito) y el RUC
+    // opcional. Se persisten como snapshot en cliente_razon_social/cliente_ruc
+    // de la venta.
+    const razonSocialAdHoc = typeof o.razon_social_ad_hoc === "string" && o.razon_social_ad_hoc.trim()
+      ? o.razon_social_ad_hoc.trim()
+      : null;
+    const rucAdHoc = typeof o.ruc_ad_hoc === "string" && o.ruc_ad_hoc.trim()
+      ? o.ruc_ad_hoc.trim()
+      : null;
+
+    // Guardas relajadas: crédito y factura necesitan IDENTIFICAR al receptor,
+    // pero admite cliente_id (ficha en el catálogo) O razón social ad-hoc.
+    if (tipoVenta === "CREDITO" && !clienteId && !razonSocialAdHoc) {
       return NextResponse.json(
-        errorResponse("Una venta a crédito requiere un cliente seleccionado."),
+        errorResponse("Una venta a crédito requiere cliente o razón social."),
         { status: 400 }
       );
     }
-    if (emitirFacturaFlag && !clienteId) {
+    if (emitirFacturaFlag && !clienteId && !razonSocialAdHoc) {
       return NextResponse.json(
-        errorResponse("Para emitir factura electrónica se requiere un cliente seleccionado."),
+        errorResponse("Para facturar hace falta cliente o razón social."),
         { status: 400 }
       );
     }
     // Pedido (proyecto) que se está facturando desde Caja. Opcional.
     const pedidoId = typeof o.pedido_id === "string" && o.pedido_id.trim() ? o.pedido_id.trim() : null;
+    // pedidos_caja (nuevo módulo Pedidos). Al venir, el server lo marca como
+    // 'facturado' post-inserción de la venta (idempotente).
+    const pedidoCajaId = typeof o.pedido_caja_id === "string" && o.pedido_caja_id.trim()
+      ? o.pedido_caja_id.trim()
+      : null;
 
     // Pedido de cocina (modalidad obligatoria en instancia En lo de Mari)
     const pedidoRaw = (o.pedido_cocina ?? null) as Record<string, unknown> | null;
@@ -303,6 +321,8 @@ export async function POST(request: NextRequest) {
       emitirFactura: emitirFacturaFlag,
       createdBy: auth.usuarioCatalogId ?? null,
       usuarioNombre: auth.user?.email ?? null,
+      razonSocialAdHoc,
+      rucAdHoc,
     });
 
     // Vincular el pedido facturado con la venta creada (Caja). Trazabilidad:
@@ -328,6 +348,21 @@ export async function POST(request: NextRequest) {
         }
       } catch (e) {
         console.error("[ventas/create] link pedido->venta fallo (venta OK):", e instanceof Error ? e.message : e);
+      }
+    }
+
+    // Wire pedidos_caja → venta (módulo nuevo Pedidos). Best-effort igual que
+    // el linkeo del legacy proyectos: la venta ya se creó; si esto falla, se
+    // loguea y el pedido queda 'pendiente' (el usuario puede cancelarlo a mano).
+    // marcarPedidoFacturado es idempotente: si el pedido ya está facturado con
+    // la misma venta, no hace nada; si con otra venta, tira error.
+    if (pedidoCajaId) {
+      try {
+        const { marcarPedidoFacturado } = await import("@/lib/pedidos-caja/server");
+        const sbPedidoCaja = createServiceRoleClientWithDbSchema(schema);
+        await marcarPedidoFacturado(sbPedidoCaja, auth.empresa_id, pedidoCajaId, ventaId, numeroControl);
+      } catch (e) {
+        console.error("[ventas/create] marcar pedido_caja facturado fallo (venta OK):", e instanceof Error ? e.message : e);
       }
     }
 

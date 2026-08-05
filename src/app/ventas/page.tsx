@@ -497,7 +497,11 @@ export default function CajaPage() {
         tipo_venta: datosVenta.condicion,
         plazo_dias: plazoDiasNum,
         metodo_pago: metodo,
-        cliente_id: datosVenta.clienteId,
+        cliente_id: null,
+        // Cliente ad-hoc: sin ficha en el catálogo. Alcanza con la razón
+        // social (obligatoria en factura y crédito) y el RUC opcional.
+        razon_social_ad_hoc: datosVenta.razonSocial.trim() || null,
+        ruc_ad_hoc: datosVenta.rucFactura.trim() || null,
         // 'Factura' arriba dispara el puente venta→factura ERP + SIFEN.
         // 'Solo ticket' registra la venta e imprime comanda, sin factura.
         emitir_factura: datosVenta.documento === "factura",

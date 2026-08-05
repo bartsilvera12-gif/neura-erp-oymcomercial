@@ -93,6 +93,12 @@ export interface CreateVentaPgParams {
    *  para que /inventario/movimientos muestre quién hizo la salida de stock. */
   createdBy?: string | null;
   usuarioNombre?: string | null;
+  /** Cliente ad-hoc para POS de Caja: identificación del receptor SIN ficha
+   *  en el catálogo. Se persisten como snapshot en cliente_razon_social /
+   *  cliente_ruc del puente venta→factura, y NO se crea ninguna fila en
+   *  `clientes`. Se ignoran si viene clienteId (la ficha manda). */
+  razonSocialAdHoc?: string | null;
+  rucAdHoc?: string | null;
 }
 
 function recalcTotals(items: CreateVentaItemInput[]) {
@@ -740,9 +746,10 @@ export async function createVentaTransaccionalPg(
     let facturaWarning: string | null = null;
     const emitirFactura = params.emitirFactura !== false;
     if (emitirFactura) try {
-      // 1) Snapshot de razón social / RUC — si hay cliente_id usamos su ficha
-      //    (nombre_facturacion tiene prioridad sobre razón social/nombre_contacto);
-      //    si no, dejamos vacío y el operador puede editar en el detalle.
+      // 1) Snapshot de razón social / RUC. Prioridad:
+      //    a) cliente_id → tomamos su ficha (nombre_facturacion > empresa > contacto > nombre).
+      //    b) sin cliente_id: usamos los datos ad-hoc del POS (razón social /
+      //       RUC tipeados en el bloque Datos de la venta, sin crear ficha).
       let razonSocial: string | null = null;
       let rucSnap: string | null = null;
       if (params.clienteId) {
@@ -759,6 +766,11 @@ export async function createVentaTransaccionalPg(
           razonSocial = s(c.nombre_facturacion) || s(c.empresa) || s(c.nombre_contacto) || s(c.nombre);
           rucSnap = s(c.ruc);
         }
+      } else {
+        const s = (v: string | null | undefined) =>
+          typeof v === "string" && v.trim() ? v.trim() : null;
+        razonSocial = s(params.razonSocialAdHoc);
+        rucSnap = s(params.rucAdHoc);
       }
 
       // 2) Próximo FAC-XXXXXX. Best-effort race — el índice único

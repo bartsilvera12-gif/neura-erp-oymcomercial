@@ -76,10 +76,15 @@ export async function saveVenta(
     /** Si false (elección "solo ticket" en el UI), la venta NO dispara el puente
      *  venta→factura ERP y no se emite factura electrónica. Default true. */
     emitir_factura?: boolean;
+    /** Datos del receptor cuando NO hay cliente en el catálogo (POS de Caja).
+     *  Se persisten como snapshot en `cliente_razon_social` y `cliente_ruc`
+     *  de la venta. La factura y el ticket los usan como identificación. */
+    razon_social_ad_hoc?: string | null;
+    ruc_ad_hoc?: string | null;
   },
   pedidoCocina?: PedidoCocinaInput,
   pagoDetalle?: PagoDetalleInput | null,
-  opts?: { permitirSinStock?: boolean; pedidoId?: string | null }
+  opts?: { permitirSinStock?: boolean; pedidoId?: string | null; pedidoCajaId?: string | null }
 ): Promise<ResultadoGuardarVenta> {
   if (!datos.items || datos.items.length === 0) {
     return { success: false, error: "La venta debe tener al menos un producto." };
@@ -107,6 +112,12 @@ export async function saveVenta(
         genera_nota_remision: datos.genera_nota_remision === true,
         emitir_factura: datos.emitir_factura !== false,
         pedido_id: opts?.pedidoId ?? null,
+        // pedidos_caja (nuevo módulo Pedidos): al pasar el id, el server marca
+        // el pedido como 'facturado' vinculándolo con la venta creada.
+        pedido_caja_id: opts?.pedidoCajaId ?? null,
+        // Cliente ad-hoc (POS de Caja sin ficha en el catálogo).
+        razon_social_ad_hoc: datos.razon_social_ad_hoc ?? null,
+        ruc_ad_hoc: datos.ruc_ad_hoc ?? null,
       }),
     });
 
