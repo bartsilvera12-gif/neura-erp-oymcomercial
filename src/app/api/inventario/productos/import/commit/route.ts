@@ -4,6 +4,13 @@ import { leerArchivoYAuth } from "@/lib/imports/import-helpers";
 import { parseProductosRows, buildResolverMaps, buildPreview, commitProductos } from "@/lib/imports/productos-importer";
 import { registrarImportAudit } from "@/lib/excel/imports-audit-pg";
 
+// Runtime Node.js explícito: el importador usa `pg` directo (no edge). Máx.
+// 5 min: sirve como red de contención si el proxy no tiene 100s tapa. Coolify
+// puede tener su propio tope; si aparece 524 igual, hay que subir el timeout
+// de nginx/traefik del proxy.
+export const runtime = "nodejs";
+export const maxDuration = 300;
+
 export async function POST(request: NextRequest) {
   const res = await leerArchivoYAuth(request);
   if (!res.ok) return NextResponse.json(errorResponse(res.error), { status: res.status });

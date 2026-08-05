@@ -73,6 +73,8 @@ export function parseProductosRows(rows: Record<string, string>[]): ProductoPars
 export interface ResolverMaps {
   productosBySku: Map<string, ProductoExistente>;
   productosByCodigo: Map<string, ProductoExistente>;
+  /** Indice por id — usado en commit para leer stock anterior sin re-consultar. */
+  productosById: Map<string, ProductoExistente>;
   categoriasByName: Map<string, string>;
   proveedoresByName: Map<string, string>;
   ubicacionesByName: Map<string, string>;
@@ -110,10 +112,12 @@ export async function buildResolverMaps(
 
   const productosBySku = new Map<string, ProductoExistente>();
   const productosByCodigo = new Map<string, ProductoExistente>();
+  const productosById = new Map<string, ProductoExistente>();
   for (const p of prods.rows) {
     const normalized: ProductoExistente = { id: p.id, sku: p.sku, codigo_barras: p.codigo_barras, stock_actual: Number(p.stock_actual) };
     if (p.sku) productosBySku.set(p.sku.toUpperCase(), normalized);
     if (p.codigo_barras) productosByCodigo.set(p.codigo_barras.toUpperCase(), normalized);
+    productosById.set(p.id, normalized);
   }
   const categoriasByName = new Map<string, string>();
   for (const c of cats.rows) categoriasByName.set(c.nombre.trim().toUpperCase(), c.id);
@@ -125,7 +129,7 @@ export async function buildResolverMaps(
     ubicacionesByName.set(u.nombre.trim().toUpperCase(), u.id);
     if (u.codigo) ubicacionesByCodigo.set(u.codigo.trim().toUpperCase(), u.id);
   }
-  return { productosBySku, productosByCodigo, categoriasByName, proveedoresByName, ubicacionesByName, ubicacionesByCodigo };
+  return { productosBySku, productosByCodigo, productosById, categoriasByName, proveedoresByName, ubicacionesByName, ubicacionesByCodigo };
 }
 
 export function buildPreview(parsed: ProductoParsed[], maps: ResolverMaps): PreviewResponse {
@@ -277,32 +281,23 @@ export async function commitProductos(
     errorMessages: [], warningMessages: [],
   };
 
-  async function registrarMovimiento(
-    producto_id: string, producto_nombre: string, producto_sku: string,
-    tipo: "ENTRADA" | "SALIDA", origen: "inventario_inicial" | "ajuste_manual",
-    cantidad: number, costo_unitario: number, refExtra?: string
-  ): Promise<void> {
-    if (cantidad <= 0) return;
-    const refFinal = refExtra ? `${refImport} ${refExtra}` : refImport;
-    try {
-      await pool.query(
-        `INSERT INTO ${tM} (
-           empresa_id, sucursal_id, producto_id, producto_nombre, producto_sku,
-           tipo, cantidad, costo_unitario, origen, referencia, fecha,
-           created_by, usuario_nombre
-         ) VALUES (
-           $1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7::numeric, $8::numeric, $9, $10, now(),
-           $11::uuid, $12
-         )`,
-        [empresaId, sucursalId, producto_id, producto_nombre, producto_sku, tipo, cantidad,
-         costo_unitario, origen, refFinal, ctx.createdBy ?? null, ctx.usuarioNombre ?? null]
-      );
-      out.movimientos_generados++;
-      if (tipo === "ENTRADA") out.unidades_entrada += cantidad;
-      else out.unidades_salida += cantidad;
-    } catch (e) {
-      out.warningMessages.push(`No se pudo registrar movimiento para ${producto_nombre}: ${(e as Error).message.slice(0, 120)}`);
-    }
+  // Movimientos encolados: se insertan en bloque al final para ahorrar
+  // ~1 round-trip por producto (con 1000+ filas el tiempo total baja de >60s
+  // a segundos; sin esto el proxy corta la request con 524).
+  interface PendingMov {
+    producto_id: string;
+    producto_nombre: string;
+    producto_sku: string;
+    tipo: "ENTRADA" | "SALIDA";
+    origen: "inventario_inicial" | "ajuste_manual";
+    cantidad: number;
+    costo_unitario: number;
+    refExtra?: string;
+  }
+  const pendingMovs: PendingMov[] = [];
+  function encolarMovimiento(m: PendingMov): void {
+    if (m.cantidad <= 0) return;
+    pendingMovs.push(m);
   }
 
   // Crear faltantes (categorias/proveedores/ubicaciones) si corresponde
@@ -372,12 +367,10 @@ export async function commitProductos(
 
       try {
         if (p.match_id) {
-          // UPDATE — leer stock anterior para calcular delta y generar movimiento
-          const prevQ = await pool.query<{ stock_actual: string | number; nombre: string; sku: string }>(
-            `SELECT stock_actual, nombre, sku FROM ${tP} WHERE id=$1::uuid AND empresa_id=$2::uuid`,
-            [p.match_id, empresaId]
-          );
-          const stockAnterior = Number(prevQ.rows[0]?.stock_actual ?? 0);
+          // UPDATE — el stock anterior sale del cache que ya cargo
+          // buildResolverMaps (productosById). Antes esto pegaba un SELECT
+          // por fila y era casi la mitad del tiempo del commit.
+          const stockAnterior = Number(maps.productosById.get(p.match_id)?.stock_actual ?? 0);
           await pool.query(
             `UPDATE ${tP} SET
                nombre=$1, sku=$2, codigo_barras=NULLIF($3,''),
@@ -395,12 +388,16 @@ export async function commitProductos(
           // Movimiento por delta (ajuste_manual + ENTRADA/SALIDA segun signo)
           const delta = p.stock_actual - stockAnterior;
           if (delta !== 0) {
-            await registrarMovimiento(
-              p.match_id, p.nombre, p.sku,
-              delta > 0 ? "ENTRADA" : "SALIDA", "ajuste_manual",
-              Math.abs(delta), p.costo_promedio,
-              `Δ ${delta > 0 ? "+" : ""}${delta} (prev=${stockAnterior} new=${p.stock_actual})`
-            );
+            encolarMovimiento({
+              producto_id: p.match_id,
+              producto_nombre: p.nombre,
+              producto_sku: p.sku,
+              tipo: delta > 0 ? "ENTRADA" : "SALIDA",
+              origen: "ajuste_manual",
+              cantidad: Math.abs(delta),
+              costo_unitario: p.costo_promedio,
+              refExtra: `Δ ${delta > 0 ? "+" : ""}${delta} (prev=${stockAnterior} new=${p.stock_actual})`,
+            });
           }
         } else {
           // Generar codigo_barras_interno si no vino
@@ -433,11 +430,15 @@ export async function commitProductos(
           out.inserted++;
           // Movimiento de inventario inicial si stock > 0
           if (p.stock_actual > 0 && inserted.rows[0]?.id) {
-            await registrarMovimiento(
-              inserted.rows[0].id, p.nombre, p.sku,
-              "ENTRADA", "inventario_inicial",
-              p.stock_actual, p.costo_promedio
-            );
+            encolarMovimiento({
+              producto_id: inserted.rows[0].id,
+              producto_nombre: p.nombre,
+              producto_sku: p.sku,
+              tipo: "ENTRADA",
+              origen: "inventario_inicial",
+              cantidad: p.stock_actual,
+              costo_unitario: p.costo_promedio,
+            });
           }
         }
         if (p.warnings.length > 0) out.warnings++;
@@ -452,6 +453,63 @@ export async function commitProductos(
         }
       }
     }));
+  }
+
+  // Flush bulk de movimientos en tandas de 500. Antes esto era un INSERT por
+  // fila (1000+ round-trips); con 500-row VALUES cae a 2-3 requests. Si una
+  // tanda falla, degradamos a INSERT individual para no perder el resto.
+  const MOV_CHUNK = 500;
+  const MOV_COLS = 13; // debe coincidir con la cantidad de placeholders por fila
+  for (const chunk of chunked(pendingMovs, MOV_CHUNK)) {
+    const values: string[] = [];
+    const params: unknown[] = [];
+    let n = 1;
+    for (const m of chunk) {
+      const refFinal = m.refExtra ? `${refImport} ${m.refExtra}` : refImport;
+      values.push(
+        `($${n}::uuid,$${n + 1}::uuid,$${n + 2}::uuid,$${n + 3},$${n + 4},$${n + 5},$${n + 6}::numeric,$${n + 7}::numeric,$${n + 8},$${n + 9},now(),$${n + 10}::uuid,$${n + 11})`
+      );
+      n += MOV_COLS - 1; // fecha es now(), no cuenta como placeholder
+      params.push(
+        empresaId, sucursalId, m.producto_id, m.producto_nombre, m.producto_sku,
+        m.tipo, m.cantidad, m.costo_unitario, m.origen, refFinal,
+        ctx.createdBy ?? null, ctx.usuarioNombre ?? null,
+      );
+    }
+    const sql = `INSERT INTO ${tM} (
+      empresa_id, sucursal_id, producto_id, producto_nombre, producto_sku,
+      tipo, cantidad, costo_unitario, origen, referencia, fecha, created_by, usuario_nombre
+    ) VALUES ${values.join(",")}`;
+    try {
+      await pool.query(sql, params);
+      out.movimientos_generados += chunk.length;
+      for (const m of chunk) {
+        if (m.tipo === "ENTRADA") out.unidades_entrada += m.cantidad;
+        else out.unidades_salida += m.cantidad;
+      }
+    } catch (e) {
+      // Fallback: la tanda entera fallo; probamos uno a uno para no perder
+      // los que si eran validos y para reportar el motivo concreto.
+      out.warningMessages.push(`Tanda de ${chunk.length} movimientos fallo en bloque, reintentando individualmente: ${(e as Error).message.slice(0, 120)}`);
+      for (const m of chunk) {
+        try {
+          const refFinal = m.refExtra ? `${refImport} ${m.refExtra}` : refImport;
+          await pool.query(
+            `INSERT INTO ${tM} (empresa_id, sucursal_id, producto_id, producto_nombre, producto_sku,
+              tipo, cantidad, costo_unitario, origen, referencia, fecha, created_by, usuario_nombre)
+             VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7::numeric,$8::numeric,$9,$10,now(),$11::uuid,$12)`,
+            [empresaId, sucursalId, m.producto_id, m.producto_nombre, m.producto_sku,
+             m.tipo, m.cantidad, m.costo_unitario, m.origen, refFinal,
+             ctx.createdBy ?? null, ctx.usuarioNombre ?? null]
+          );
+          out.movimientos_generados++;
+          if (m.tipo === "ENTRADA") out.unidades_entrada += m.cantidad;
+          else out.unidades_salida += m.cantidad;
+        } catch (e2) {
+          out.warningMessages.push(`No se pudo registrar movimiento para ${m.producto_nombre}: ${(e2 as Error).message.slice(0, 120)}`);
+        }
+      }
+    }
   }
 
   // Con las tandas concurrentes los mensajes llegan en el orden en que
