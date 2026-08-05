@@ -6,7 +6,6 @@ import { Fragment, useEffect, useState } from "react";
 import { AlertTriangle, RotateCw, X } from "lucide-react";
 import EdgeScrollArea from "@/components/ui/EdgeScrollArea";
 import { FancySelect } from "@/components/ui/FancySelect";
-import MobileFab from "@/components/ui/MobileFab";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import { getVentas } from "@/lib/ventas/storage";
 import AnularVentaModal from "../AnularVentaModal";
@@ -308,12 +307,9 @@ export default function VentasPage() {
 
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-xl font-semibold">Órdenes de venta</h2>
-          <Link
-            href="/ventas/nueva"
-            className="bg-[#0EA5E9] hover:bg-[#0284C7] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
-          >
-            + Nueva venta
-          </Link>
+          {/* Botón "+ Nueva venta" removido a pedido de la usuaria — en O&M
+              las ventas se arman desde la Caja o desde Pedidos. La pantalla
+              de Órdenes queda solo para consulta / anular. */}
         </div>
 
         {/* Filtros */}
@@ -734,8 +730,7 @@ export default function VentasPage() {
 
       </div>
 
-      {/* FAB mobile: acceso 1-tap a "+ Nueva venta" desde cualquier scroll position */}
-      <MobileFab href="/ventas/nueva" label="Nueva venta" />
+      {/* FAB mobile removido junto con el botón "+ Nueva venta" del header. */}
 
       {ventaAnular && (
         <AnularVentaModal
