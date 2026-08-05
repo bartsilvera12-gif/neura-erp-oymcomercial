@@ -16,6 +16,7 @@ import Link from "next/link";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 import { Trash2 } from "lucide-react";
+import { CrearDerivadoModal } from "@/components/inventario/CrearDerivadoModal";
 
 type Destino = "resto_aprovechable" | "recorte_vendible" | "merma" | "consumo_interno";
 
@@ -115,6 +116,9 @@ export default function PesajeCortesPage() {
   const [ok, setOk] = useState<string | null>(null);
   const [historial, setHistorial] = useState<OperacionRow[]>([]);
   const [cargandoHistorial, setCargandoHistorial] = useState(true);
+  /** Estado del modal "+Crear derivado": guarda qué línea del form pidió el
+   *  alta rápida para poder auto-seleccionar el producto creado al terminar. */
+  const [derivadoModalLineaKey, setDerivadoModalLineaKey] = useState<number | null>(null);
 
   /** Trae TODOS los productos (para tener candidatos de origen filtrados por
    *  controlado_por_peso y para el picker de derivado). El endpoint
@@ -413,21 +417,33 @@ export default function PesajeCortesPage() {
                         <label className="block text-xs text-slate-600 mb-1">
                           ¿A qué producto se pasa este recorte? *
                         </label>
-                        <SearchableSelect
-                          value={l.producto_derivado_id}
-                          onChange={(id) => updateLinea(l.key, { producto_derivado_id: id })}
-                          options={productos
-                            .filter((p) => p.id !== origen?.id)
-                            .map((p) => ({
-                              id: p.id,
-                              label: p.nombre,
-                              hint: p.sku,
-                            }))}
-                          placeholder="Elegí el producto donde entra el recorte"
-                        />
+                        <div className="flex items-start gap-2">
+                          <div className="flex-1 min-w-0">
+                            <SearchableSelect
+                              value={l.producto_derivado_id}
+                              onChange={(id) => updateLinea(l.key, { producto_derivado_id: id })}
+                              options={productos
+                                .filter((p) => p.id !== origen?.id)
+                                .map((p) => ({
+                                  id: p.id,
+                                  label: p.nombre,
+                                  hint: p.sku,
+                                }))}
+                              placeholder="Elegí el producto donde entra el recorte"
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setDerivadoModalLineaKey(l.key)}
+                            className="shrink-0 rounded-md border border-sky-200 bg-white px-2.5 py-2 text-xs font-medium text-sky-700 hover:bg-sky-50"
+                            title="Crear un nuevo producto derivado sin salir de esta pantalla"
+                          >
+                            + Crear
+                          </button>
+                        </div>
                         <p className="mt-1 text-[11px] text-slate-500">
-                          Tiene que estar creado en <span className="font-medium">Inventario</span> con su propio
-                          SKU y precio (ej. "Recorte de queso").
+                          Si el producto donde entra el recorte todavía no existe, tocá
+                          <span className="font-medium"> + Crear</span> y lo damos de alta acá mismo.
                         </p>
                       </>
                     ) : (
@@ -553,6 +569,20 @@ export default function PesajeCortesPage() {
           </ul>
         )}
       </div>
+
+      <CrearDerivadoModal
+        open={derivadoModalLineaKey !== null}
+        onCancel={() => setDerivadoModalLineaKey(null)}
+        onCreated={(d) => {
+          // Refresca el catálogo para que el SearchableSelect vea el nuevo id,
+          // y setea el derivado en la línea que originó el modal.
+          void recargarProductos();
+          if (derivadoModalLineaKey !== null) {
+            updateLinea(derivadoModalLineaKey, { producto_derivado_id: d.id });
+          }
+          setDerivadoModalLineaKey(null);
+        }}
+      />
     </div>
   );
 }
