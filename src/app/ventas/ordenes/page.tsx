@@ -591,6 +591,18 @@ export default function VentasPage() {
                               Ticket
                             </a>
                           )}
+                          {/* Impresión sobre talonario pre-impreso (Epson matricial).
+                              El papel trae el marco / timbrado; solo pintamos los
+                              datos variables en las celdas. */}
+                          <a
+                            href={`/api/ventas/${v.id}/talonario`}
+                            target="_blank"
+                            rel="noopener"
+                            className="inline-flex items-center justify-center rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 transition-colors"
+                            title="Imprimir sobre el talonario físico pre-impreso"
+                          >
+                            Talonario
+                          </a>
                           {!anulada && (() => {
                             const est = v.factura_estado_sifen;
                             const facturaBloqueaAnular =

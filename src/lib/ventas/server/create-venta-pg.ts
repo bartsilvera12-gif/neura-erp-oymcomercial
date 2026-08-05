@@ -431,6 +431,34 @@ export async function createVentaTransaccionalPg(
     notaRemisionNumero = `NR-${String(nextNr).padStart(6, "0")}`;
   }
 
+  // Snapshot razón social + RUC del receptor. Se persiste tanto en `ventas`
+  // (para reimprimir ticket / talonario sin depender de la factura) como en
+  // `facturas` cuando se emite factura ERP más abajo. Prioridad:
+  //   a) cliente_id → ficha del catálogo (nombre_facturacion > empresa > contacto > nombre).
+  //   b) sin cliente_id → datos ad-hoc del POS ("cliente ad-hoc").
+  let razonSocialSnap: string | null = null;
+  let rucSnap: string | null = null;
+  {
+    const s = (v: string | null | undefined) =>
+      typeof v === "string" && v.trim() ? v.trim() : null;
+    if (params.clienteId) {
+      const cliQ = await sb
+        .from("clientes")
+        .select("empresa, nombre, nombre_contacto, nombre_facturacion, ruc")
+        .eq("id", params.clienteId)
+        .eq("empresa_id", params.empresaId)
+        .maybeSingle();
+      const c = cliQ.data as Record<string, string | null> | null;
+      if (c) {
+        razonSocialSnap = s(c.nombre_facturacion) || s(c.empresa) || s(c.nombre_contacto) || s(c.nombre);
+        rucSnap = s(c.ruc);
+      }
+    } else {
+      razonSocialSnap = s(params.razonSocialAdHoc);
+      rucSnap = s(params.rucAdHoc);
+    }
+  }
+
   // 5) Insertar venta. Reintenta hasta 3 veces si el numero_control choca con
   // el índice único (carrera con otra venta calculando el mismo próximo número).
   let numeroControl = await calcularNumeroControl();
@@ -459,6 +487,8 @@ export async function createVentaTransaccionalPg(
         fecha: fechaIso,
         observaciones: observacionesFinal,
         caja_id: params.cajaId ?? null,
+        cliente_razon_social: razonSocialSnap,
+        cliente_ruc: rucSnap,
       })
       .select("id")
       .single();
@@ -746,32 +776,9 @@ export async function createVentaTransaccionalPg(
     let facturaWarning: string | null = null;
     const emitirFactura = params.emitirFactura !== false;
     if (emitirFactura) try {
-      // 1) Snapshot de razón social / RUC. Prioridad:
-      //    a) cliente_id → tomamos su ficha (nombre_facturacion > empresa > contacto > nombre).
-      //    b) sin cliente_id: usamos los datos ad-hoc del POS (razón social /
-      //       RUC tipeados en el bloque Datos de la venta, sin crear ficha).
-      let razonSocial: string | null = null;
-      let rucSnap: string | null = null;
-      if (params.clienteId) {
-        const cliQ = await sb
-          .from("clientes")
-          .select("empresa, nombre, nombre_contacto, nombre_facturacion, ruc")
-          .eq("id", params.clienteId)
-          .eq("empresa_id", params.empresaId)
-          .maybeSingle();
-        const c = cliQ.data as Record<string, string | null> | null;
-        if (c) {
-          const s = (v: string | null | undefined) =>
-            typeof v === "string" && v.trim() ? v.trim() : null;
-          razonSocial = s(c.nombre_facturacion) || s(c.empresa) || s(c.nombre_contacto) || s(c.nombre);
-          rucSnap = s(c.ruc);
-        }
-      } else {
-        const s = (v: string | null | undefined) =>
-          typeof v === "string" && v.trim() ? v.trim() : null;
-        razonSocial = s(params.razonSocialAdHoc);
-        rucSnap = s(params.rucAdHoc);
-      }
+      // Snapshot de razón social / RUC ya calculado más arriba (se reutiliza
+      // el mismo valor persistido en `ventas` para mantener consistencia).
+      const razonSocial = razonSocialSnap;
 
       // 2) Próximo FAC-XXXXXX. Best-effort race — el índice único
       //    (empresa_id, numero_factura) protege contra duplicados.
