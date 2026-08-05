@@ -36,15 +36,29 @@ export async function GET(request: NextRequest) {
 
     // Por sucursal: el correlativo de SKU es independiente en cada una, igual
     // que el único (empresa_id, sucursal_id, sku).
-    const { data, error } = await aplicarFiltroSucursal(
-      ctx.supabase.from("productos").select("sku").eq("empresa_id", ctx.auth.empresa_id),
-      exigirSucursal(ctx.auth.sucursal_id)
-    );
-    if (error) throw new Error(error.message);
+    //
+    // Paginamos porque PostgREST tapa un SELECT sin range en 1000 filas: si el
+    // producto que tiene el correlativo mas alto queda fuera de las primeras
+    // 1000, el generador sugeria un SKU ya usado y el alta caia por duplicado.
+    const PAGE = 1000;
+    const skuRows: Array<{ sku: string | null }> = [];
+    let from = 0;
+    for (;;) {
+      const to = from + PAGE - 1;
+      const { data, error } = await aplicarFiltroSucursal(
+        ctx.supabase.from("productos").select("sku").eq("empresa_id", ctx.auth.empresa_id),
+        exigirSucursal(ctx.auth.sucursal_id)
+      ).range(from, to);
+      if (error) throw new Error(error.message);
+      const page = (data ?? []) as Array<{ sku: string | null }>;
+      skuRows.push(...page);
+      if (page.length < PAGE) break;
+      from += PAGE;
+    }
 
     // prefix -> { maxNum, width }
     const map = new Map<string, { maxNum: number; width: number }>();
-    for (const r of (data ?? []) as Array<{ sku: string | null }>) {
+    for (const r of skuRows) {
       const p = r.sku ? parseSku(r.sku) : null;
       if (!p) continue;
       const cur = map.get(p.prefix);

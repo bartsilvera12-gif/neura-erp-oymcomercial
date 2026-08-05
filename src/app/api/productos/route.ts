@@ -56,20 +56,53 @@ async function existsId(
   return (data ?? []).length > 0;
 }
 
+/**
+ * PostgREST tapa cualquier SELECT sin `range()` en 1000 filas por default. La
+ * pantalla de Inventario mostraba "Total 1000" aunque hubiera mas, y el
+ * generador de SKUs sugeria correlativos que ya existian (los que estaban
+ * fuera del primer 1000 no se veian). Paginamos server-side y concatenamos
+ * hasta agotar la tabla.
+ */
+const PRODUCTOS_PAGE_SIZE = 1000;
+
+async function fetchAllProductos(
+  sb: AppSupabaseClient,
+  empresaId: string,
+  sucursalId: string
+): Promise<Record<string, unknown>[]> {
+  const acc: Record<string, unknown>[] = [];
+  let from = 0;
+  for (;;) {
+    const to = from + PRODUCTOS_PAGE_SIZE - 1;
+    const { data, error } = await aplicarFiltroSucursal(
+      sb
+        .from("productos")
+        .select(PRODUCTO_COLS)
+        .eq("empresa_id", empresaId)
+        .eq("activo", true),
+      sucursalId
+    )
+      .order("nombre")
+      .range(from, to);
+    if (error) throw new Error(error.message);
+    const page = (data ?? []) as unknown as Record<string, unknown>[];
+    acc.push(...page);
+    if (page.length < PRODUCTOS_PAGE_SIZE) break;
+    from += PRODUCTOS_PAGE_SIZE;
+  }
+  return acc;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const ctx = await getTenantSupabaseFromAuth(request);
     if (!ctx) return NextResponse.json(errorResponse(API_ERRORS.UNAUTHORIZED), { status: 401 });
-    const { data, error } = await aplicarFiltroSucursal(
-      ctx.supabase
-        .from("productos")
-        .select(PRODUCTO_COLS)
-        .eq("empresa_id", ctx.auth.empresa_id)
-        .eq("activo", true),
+    const rowsRaw = await fetchAllProductos(
+      ctx.supabase,
+      ctx.auth.empresa_id,
       exigirSucursal(ctx.auth.sucursal_id)
-    ).order("nombre");
-    if (error) throw new Error(error.message);
-    const rows = ((data ?? []) as unknown as Record<string, unknown>[]).map(rowToApi);
+    );
+    const rows = rowsRaw.map(rowToApi);
     return NextResponse.json(successResponse({ productos: rows }));
   } catch (err) {
     const rSuc = respuestaSucursalNoAsignada(err);

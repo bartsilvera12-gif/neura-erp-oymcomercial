@@ -315,6 +315,23 @@ export async function updateProducto(
   return rowToProducto(data);
 }
 
+/**
+ * Elimina (soft-delete) un producto via API server-side. El backend hace
+ * `activo=false`; el producto deja de aparecer en inventario y en la caja,
+ * pero las ventas/compras/movimientos historicos siguen intactos.
+ */
+export async function deleteProducto(id: string): Promise<void> {
+  const res = await fetch(`/api/productos/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  const json = await res.json().catch(() => ({} as Record<string, unknown>));
+  if (!res.ok || !json?.success) {
+    const msg = (json as { error?: string })?.error ?? `Error ${res.status} al eliminar producto.`;
+    throw new Error(msg);
+  }
+}
+
 // ─── Movimientos ─────────────────────────────────────────────────────────────
 
 /** Lista movimientos via API server-side (PG directo). */

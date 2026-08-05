@@ -255,3 +255,50 @@ export async function PATCH(
     return NextResponse.json(errorResponse("No se pudo actualizar el producto."), { status: 500 });
   }
 }
+
+/**
+ * Soft-delete: pone `activo=false` en `productos`. NO hace hard delete porque
+ * el producto vive referenciado en ventas, compras y movimientos_inventario
+ * historicos — borrarlo fisicamente romperia esos FKs y falsearia reportes.
+ *
+ * El GET del listado ya filtra por `activo=true`, asi que un producto
+ * "borrado" desaparece de Inventario, del buscador de la caja y del generador
+ * de SKUs, pero los tickets viejos siguen mostrando su nombre. Si se
+ * necesitara mas adelante, se puede agregar una vista de "Papelera" leyendo
+ * `activo=false` para reactivar.
+ */
+export async function DELETE(
+  request: NextRequest,
+  ctxParams: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await ctxParams.params;
+    const ctx = await getTenantSupabaseFromAuth(request);
+    if (!ctx) return NextResponse.json(errorResponse(API_ERRORS.UNAUTHORIZED), { status: 401 });
+
+    // Filtramos por sucursal ademas de empresa para no dejar que alguien de
+    // otra sucursal desactive productos con solo saber el UUID.
+    const upd = await aplicarFiltroSucursal(
+      ctx.supabase
+        .from("productos")
+        .update({ activo: false })
+        .eq("empresa_id", ctx.auth.empresa_id)
+        .eq("id", id),
+      exigirSucursal(ctx.auth.sucursal_id)
+    ).select("id").maybeSingle();
+
+    if (upd.error) {
+      console.error("[/api/productos/[id] DELETE]", upd.error.message);
+      return NextResponse.json(errorResponse("No se pudo eliminar el producto."), { status: 500 });
+    }
+    if (!upd.data) {
+      return NextResponse.json(errorResponse(API_ERRORS.NOT_FOUND), { status: 404 });
+    }
+    return NextResponse.json(successResponse({ id }));
+  } catch (err) {
+    const rSuc = respuestaSucursalNoAsignada(err);
+    if (rSuc) return rSuc;
+    console.error("[/api/productos/[id] DELETE] outer", err instanceof Error ? err.message : err);
+    return NextResponse.json(errorResponse("No se pudo eliminar el producto."), { status: 500 });
+  }
+}
