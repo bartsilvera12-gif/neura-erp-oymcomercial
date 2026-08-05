@@ -11,6 +11,7 @@ const SIDEBAR_SLUG_HREF_ORDER: { slug: string; href: string }[] = [
   { slug: "conversaciones-finalizadas", href: "/dashboard/conversaciones-finalizadas" },
   { slug: "monitoreo", href: "/dashboard/monitoreo" },
   { slug: "ventas", href: "/ventas" },
+  { slug: "ordenes_venta", href: "/ventas/ordenes" },
   { slug: "pedidos", href: "/pedidos" },
   { slug: "presupuestos", href: "/presupuestos" },
   { slug: "recetas", href: "/dashboard/recetas" },
@@ -77,6 +78,11 @@ export function isModuleSlugGranted(
   }
   if (routeSlug === "gestion-clientes" && grantedSlugs.has("clientes")) return true;
   if (routeSlug === "notas_credito" && grantedSlugs.has("ventas")) return true;
+  // Legacy: quien tenía "ventas" antes de separar Órdenes de venta sigue
+  // viendo el historial. La restricción explícita se hace desactivando el
+  // slug "ordenes_venta" o dándole al usuario solo "ordenes_venta" sin
+  // "ventas" (acceso a historial sin el POS).
+  if (routeSlug === "ordenes_venta" && grantedSlugs.has("ventas")) return true;
   return false;
 }
 
@@ -137,6 +143,8 @@ export function pathRequiresModuleSlug(pathname: string): string | null {
     return "conversaciones";
   }
   if (p.startsWith("/notas-credito")) return "notas_credito";
+  // Más específico primero: Órdenes de venta es su propio módulo, no Caja.
+  if (p.startsWith("/ventas/ordenes")) return "ordenes_venta";
   if (p.startsWith("/ventas")) return "ventas";
   if (p.startsWith("/pedidos")) return "pedidos";
   // Más específico primero: Reposición es su propio módulo, no Inventario.

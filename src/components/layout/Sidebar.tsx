@@ -119,6 +119,10 @@ const MENU_STRUCTURE: MenuItem[] = [
     icon: Activity,
   },
   { key: "ventas", slug: "ventas", label: "Caja", href: "/ventas", icon: ShoppingCart },
+  // Órdenes de venta: historial + reimpresión. Slug propio para poder darle
+  // acceso a alguien SIN darle el POS de Caja (y viceversa). Compat: quien
+  // tiene "ventas" también ve este por alias en route-slug-map.
+  { key: "ordenes_venta", slug: "ordenes_venta", label: "Órdenes de venta", href: "/ventas/ordenes", icon: ListChecks },
   // Módulo "Pedidos" — vendedores arman pedidos que la Caja cobra. Es
   // diferente del legacy `proyectos` (que sigue oculto). Slug = "pedidos"
   // se activó en la migración 20260805200000_pedidos_caja.sql.
@@ -208,7 +212,7 @@ const MENU_STRUCTURE: MenuItem[] = [
  */
 const MENU_FAMILIES: { id: string; titulo: string; keys: string[] }[] = [
   { id: "inicio", titulo: "Inicio", keys: ["dashboard"] },
-  { id: "comercial", titulo: "Comercial", keys: ["clientes", "crm", "gestion-clientes", "ventas", "pedidos", "presupuestos", "comisiones", "planes"] },
+  { id: "comercial", titulo: "Comercial", keys: ["clientes", "crm", "gestion-clientes", "ventas", "ordenes_venta", "pedidos", "presupuestos", "comisiones", "planes"] },
   { id: "finanzas", titulo: "Finanzas", keys: ["pagos", "gastos", "notas_credito", "reportes"] },
   { id: "operaciones", titulo: "Operaciones", keys: ["inventario", "compras", "recetas", "proyectos"] },
   { id: "omnicanal", titulo: "Omnicanal", keys: ["conversaciones", "conversaciones-finalizadas", "historial-omnicanal", "monitoreo", "campanas"] },
