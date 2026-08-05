@@ -45,6 +45,12 @@ interface ProductoRow {
   descripcion?: string | null;
   modo_receta?: string | null;
   tipo_iva?: string | null;
+  // Peso — Fase 1/2. Sin estos campos en el mapper, la ficha de edición
+  // volvía a mostrar precios en 0 aunque estuvieran guardados en DB.
+  controlado_por_peso?: boolean | null;
+  precio_kg_entero?: number | string | null;
+  precio_kg_recortado?: number | string | null;
+  modalidades_activas?: string[] | null;
 }
 
 interface MovimientoRow {
@@ -99,6 +105,16 @@ function rowToProducto(row: ProductoRow): Producto {
     descripcion: row.descripcion ?? null,
     modo_receta: row.modo_receta ?? "preparado_al_vender",
     tipo_iva: (row.tipo_iva === "EXENTA" || row.tipo_iva === "5%" ? row.tipo_iva : "10%") as "EXENTA" | "5%" | "10%",
+    controlado_por_peso: row.controlado_por_peso === true,
+    precio_kg_entero: row.precio_kg_entero != null ? Number(row.precio_kg_entero) : null,
+    precio_kg_recortado: row.precio_kg_recortado != null ? Number(row.precio_kg_recortado) : null,
+    // Filtro contra valores conocidos: si algún registro viejo trae otra
+    // cosa, no lo propagamos al form (evita romper el chequeo del select).
+    modalidades_activas: Array.isArray(row.modalidades_activas)
+      ? (row.modalidades_activas.filter(
+          (m): m is "entero" | "recortado" => m === "entero" || m === "recortado"
+        ))
+      : null,
   };
 }
 

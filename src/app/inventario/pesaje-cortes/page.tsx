@@ -31,7 +31,7 @@ const DESTINO_LABEL: Record<Destino, string> = {
 // son cercanos y el impacto contable es distinto).
 const DESTINO_HELP: Record<Destino, string> = {
   resto_aprovechable: "Peso que queda en la pieza original. No genera movimiento adicional.",
-  recorte_vendible: "Se transforma en stock del producto derivado (elegir abajo).",
+  recorte_vendible: "El recorte separado se convierte en stock de OTRO producto que ya tenés cargado (con su propio SKU y precio). Ejemplo: de una pieza de queso, el recorte se pasa a 'Recorte de queso'.",
   merma: "Desperdicio. Sale del inventario y no vuelve.",
   consumo_interno: "Usado internamente (degustación, uso propio). Sale del inventario.",
 };
@@ -410,7 +410,9 @@ export default function PesajeCortesPage() {
                   <div className="md:col-span-5">
                     {l.destino === "recorte_vendible" ? (
                       <>
-                        <label className="block text-xs text-slate-600 mb-1">Producto derivado *</label>
+                        <label className="block text-xs text-slate-600 mb-1">
+                          ¿A qué producto se pasa este recorte? *
+                        </label>
                         <SearchableSelect
                           value={l.producto_derivado_id}
                           onChange={(id) => updateLinea(l.key, { producto_derivado_id: id })}
@@ -424,7 +426,8 @@ export default function PesajeCortesPage() {
                           placeholder="Elegí el producto donde entra el recorte"
                         />
                         <p className="mt-1 text-[11px] text-slate-500">
-                          Debe existir como producto (con SKU y precio propios).
+                          Tiene que estar creado en <span className="font-medium">Inventario</span> con su propio
+                          SKU y precio (ej. "Recorte de queso").
                         </p>
                       </>
                     ) : (
