@@ -24,7 +24,6 @@ import {
   Receipt,
   Plus,
   Minus,
-  User,
   Package,
   ImageIcon,
 } from "lucide-react";
@@ -668,27 +667,12 @@ export default function NuevoPedidoPage() {
       {/* Resumen: cliente + liquidación IVA + total + CTA */}
       {cart.length > 0 && (
         <div className="grid items-start gap-4 lg:grid-cols-[1fr_380px]">
-          {/* Cliente */}
+          {/* Cliente selector removido — O&M cobra directo desde la Caja sin
+              ficha de cliente (con razón social alcanza). El state `clienteId`
+              queda en "" por default; ver storage para no romper el payload. */}
           <div className="rounded-2xl border-2 border-[#4FAEB2]/20 bg-white p-5 shadow-[0_2px_10px_-2px_rgba(79,174,178,0.12)]">
-            <label className="mb-1.5 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-              <User className="h-3.5 w-3.5 text-[#4FAEB2]" />
-              Cliente (opcional)
-            </label>
-            <select
-              value={clienteId}
-              onChange={(e) => setClienteId(e.target.value)}
-              className={`${inputClass} w-full`}
-            >
-              <option value="">— Sin cliente —</option>
-              {clientes.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.empresa || c.nombre_contacto || "Cliente"}
-                </option>
-              ))}
-            </select>
-
             {/* Liquidación de IVA (IVA incluido en el precio) */}
-            <div className="mt-4 border-t border-slate-200 pt-3">
+            <div>
               <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
                 <Receipt className="h-3 w-3 text-[#4FAEB2]" />
                 Liquidación de IVA
