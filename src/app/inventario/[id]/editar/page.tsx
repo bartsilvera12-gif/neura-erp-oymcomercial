@@ -817,6 +817,9 @@ export default function EditarProductoPage() {
             </div>
           </div>
 
+          {/* Bloque PRECIOS oculto cuando el producto es controlado por peso:
+              los precios viven en "Venta por peso" (precio/kg entero/recortado). */}
+          {!weightCfg.controlado_por_peso && (
           <div>
             <p className="text-xs text-gray-400 mb-3 uppercase tracking-wide font-semibold">
               {showPrecioVenta ? "Precios" : "Costo de adquisición"}
@@ -921,6 +924,7 @@ export default function EditarProductoPage() {
               />
             )}
           </div>
+          )}
 
           <div className={`grid grid-cols-1 sm:grid-cols-2 gap-6 ${showStock ? "" : "hidden"}`}>
             <div>

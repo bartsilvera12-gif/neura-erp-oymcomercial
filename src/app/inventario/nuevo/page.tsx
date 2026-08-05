@@ -605,7 +605,11 @@ export default function NuevoProductoPage() {
             </div>
           </div>
 
-          {/* Costo (+ Markup + Precio en productos comerciales) — bloque reactivo */}
+          {/* Costo (+ Markup + Precio en productos comerciales) — bloque reactivo.
+              Se oculta cuando el producto es controlado por peso: en ese caso los
+              precios viven en el bloque "Venta por peso" (precio por kg entero /
+              recortado) y el costo se calcula desde las compras. */}
+          {!weightCfg.controlado_por_peso && (
           <div>
             <p className="text-xs text-gray-400 mb-3 uppercase tracking-wide font-semibold">
               {showPrecioVenta ? "Precios — los tres campos son reactivos entre sí" : "Costo de adquisición"}
@@ -726,9 +730,10 @@ export default function NuevoProductoPage() {
               />
             )}
           </div>
+          )}
 
           {/* Venta por peso (queso, jamón, fraccionables) */}
-          <div className="border-t border-slate-100 pt-6">
+          <div className={weightCfg.controlado_por_peso ? "" : "border-t border-slate-100 pt-6"}>
             <WeightConfigSection value={weightCfg} onChange={setWeightCfg} />
           </div>
 
