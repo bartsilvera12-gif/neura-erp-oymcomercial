@@ -11,6 +11,7 @@ const SIDEBAR_SLUG_HREF_ORDER: { slug: string; href: string }[] = [
   { slug: "conversaciones-finalizadas", href: "/dashboard/conversaciones-finalizadas" },
   { slug: "monitoreo", href: "/dashboard/monitoreo" },
   { slug: "ventas", href: "/ventas" },
+  { slug: "pedidos", href: "/pedidos" },
   { slug: "presupuestos", href: "/presupuestos" },
   { slug: "recetas", href: "/dashboard/recetas" },
   { slug: "reposicion", href: "/inventario/reposicion" },
@@ -137,6 +138,7 @@ export function pathRequiresModuleSlug(pathname: string): string | null {
   }
   if (p.startsWith("/notas-credito")) return "notas_credito";
   if (p.startsWith("/ventas")) return "ventas";
+  if (p.startsWith("/pedidos")) return "pedidos";
   // Más específico primero: Reposición es su propio módulo, no Inventario.
   if (p.startsWith("/inventario/reposicion")) return "reposicion";
   if (p.startsWith("/inventario")) return "inventario";

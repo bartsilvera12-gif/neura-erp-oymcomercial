@@ -119,6 +119,10 @@ const MENU_STRUCTURE: MenuItem[] = [
     icon: Activity,
   },
   { key: "ventas", slug: "ventas", label: "Caja", href: "/ventas", icon: ShoppingCart },
+  // Módulo "Pedidos" — vendedores arman pedidos que la Caja cobra. Es
+  // diferente del legacy `proyectos` (que sigue oculto). Slug = "pedidos"
+  // se activó en la migración 20260805200000_pedidos_caja.sql.
+  { key: "pedidos", slug: "pedidos", label: "Pedidos", href: "/pedidos", icon: Receipt },
   { key: "presupuestos", slug: "presupuestos", label: "Presupuestos", href: "/presupuestos", icon: FileText },
   // Pedidos (módulo `proyectos`) oculto: O&M Comercial cobra directo en la
   // caja y no arma pedidos previos para facturar después. Las rutas y los
@@ -204,7 +208,7 @@ const MENU_STRUCTURE: MenuItem[] = [
  */
 const MENU_FAMILIES: { id: string; titulo: string; keys: string[] }[] = [
   { id: "inicio", titulo: "Inicio", keys: ["dashboard"] },
-  { id: "comercial", titulo: "Comercial", keys: ["clientes", "crm", "gestion-clientes", "ventas", "presupuestos", "comisiones", "planes"] },
+  { id: "comercial", titulo: "Comercial", keys: ["clientes", "crm", "gestion-clientes", "ventas", "pedidos", "presupuestos", "comisiones", "planes"] },
   { id: "finanzas", titulo: "Finanzas", keys: ["pagos", "gastos", "notas_credito", "reportes"] },
   { id: "operaciones", titulo: "Operaciones", keys: ["inventario", "compras", "recetas", "proyectos"] },
   { id: "omnicanal", titulo: "Omnicanal", keys: ["conversaciones", "conversaciones-finalizadas", "historial-omnicanal", "monitoreo", "campanas"] },
