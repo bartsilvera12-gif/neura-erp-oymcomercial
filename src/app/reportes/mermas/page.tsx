@@ -16,6 +16,7 @@ import Link from "next/link";
 import PageHeader from "@/components/ui/PageHeader";
 import StatCard from "@/components/ui/StatCard";
 import SearchableSelect from "@/components/ui/SearchableSelect";
+import ExportExcelButton from "@/components/ui/ExportExcelButton";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import { AlertTriangle, Coffee, Package as PackageIcon, PackageX } from "lucide-react";
 
@@ -152,13 +153,24 @@ export default function ReporteMermasPage() {
     [topProductos]
   );
 
+  // URL del export refleja los filtros activos para que el Excel descargado
+  // coincida con lo que ve el usuario en pantalla.
+  const exportUrl = useMemo(() => {
+    const p = new URLSearchParams({ desde, hasta, destino: destinoFiltro });
+    if (productoFiltro) p.set("producto_id", productoFiltro);
+    return `/api/reportes/mermas/export?${p.toString()}`;
+  }, [desde, hasta, destinoFiltro, productoFiltro]);
+
   return (
     <div className="space-y-6">
-      <PageHeader
-        eyebrow="Zentra · Análisis"
-        title="Mermas y consumo interno"
-        description="Peso perdido a merma y usado internamente durante operaciones de pesaje / cortes."
-      />
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <PageHeader
+          eyebrow="Zentra · Análisis"
+          title="Mermas y consumo interno"
+          description="Peso perdido a merma y usado internamente durante operaciones de pesaje / cortes."
+        />
+        <ExportExcelButton url={exportUrl} />
+      </div>
 
       {/* Filtros */}
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4">
