@@ -5,21 +5,15 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import MontoInput from "@/components/ui/MontoInput";
 import SelectFromList from "@/components/inventario/SelectFromList";
+import { CrearRapidoModal } from "@/components/inventario/CrearRapidoModal";
 import { MargenPorCanal } from "@/components/inventario/MargenPorCanal";
 import { productoExiste, saveProducto } from "@/lib/inventario/storage";
 import type { MetodoValuacion, TipoIvaProducto } from "@/lib/inventario/types";
-import { ShoppingBag, Boxes, ClipboardList, type LucideIcon } from "lucide-react";
 
 // Opciones estándar de unidad de medida para gastro
 const UNIDADES_OPCIONES = [
   "UNIDAD","KG","G","LT","ML","CAJA","BOLSA","PAQUETE","DOCENA","LATA","BOTELLA","PORCION","COMBO",
 ] as const;
-
-const TIPO_SUMMARY: Record<"reventa" | "menu" | "materia", { titulo: string; descripcion: string; Icon: LucideIcon; acento: string }> = {
-  reventa: { titulo: "Producto de reventa", descripcion: "Se compra y se vende tal cual. Controla stock y descuenta al vender.", Icon: ShoppingBag, acento: "text-sky-600" },
-  menu:    { titulo: "Producto del menú",   descripcion: "Se vende en Ventas y genera pedido. No descuenta stock directo.",     Icon: ClipboardList, acento: "text-amber-600" },
-  materia: { titulo: "Materia prima / insumo", descripcion: "Se usa para recetas y costeo. No aparece como producto de venta.", Icon: Boxes, acento: "text-emerald-600" },
-};
 
 interface CatRow { id: string; nombre: string }
 interface UbiRow { id: string; nombre: string; tipo: string }
@@ -51,6 +45,8 @@ export default function NuevoProductoPage() {
   const [generandoCodigo, setGenerandoCodigo] = useState(false);
   const [generandoSku, setGenerandoSku] = useState(false);
   const [skuPatrones, setSkuPatrones] = useState<{ prefix: string; siguiente: string }[]>([]);
+  const [modalCategoriaAbierto, setModalCategoriaAbierto] = useState(false);
+  const [modalProveedorAbierto, setModalProveedorAbierto] = useState(false);
 
   // Relaciones opcionales
   const [categoriaId, setCategoriaId] = useState<string | null>(null);
@@ -383,7 +379,6 @@ export default function NuevoProductoPage() {
     "w-full border border-slate-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-[#0EA5E9] focus:outline-none bg-white text-sm";
   const labelClass = "block text-sm font-medium text-slate-700 mb-2";
 
-  const summary = TIPO_SUMMARY[tipoGastro];
   const showStock = true;
   const showPrecioVenta = true;
 
@@ -392,16 +387,6 @@ export default function NuevoProductoPage() {
 
       <div>
         <h1 className="text-3xl font-bold text-gray-800">Nuevo producto</h1>
-      </div>
-
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 max-w-5xl">
-        <div className="flex items-start gap-4">
-          <summary.Icon className={`w-7 h-7 shrink-0 ${summary.acento}`} />
-          <div className="flex-1 min-w-0">
-            <div className="text-base font-semibold text-slate-900">{summary.titulo}</div>
-            <div className="text-sm text-slate-600 mt-0.5">{summary.descripcion}</div>
-          </div>
-        </div>
       </div>
 
       <div className="bg-white rounded-xl shadow p-6 max-w-5xl">
@@ -735,12 +720,13 @@ export default function NuevoProductoPage() {
                   <span className="text-xs text-gray-400 truncate">
                     {categorias.length === 0 ? "Todavía no cargaste categorías." : `${categorias.length} disponibles`}
                   </span>
-                  <Link
-                    href="/inventario/categorias"
+                  <button
+                    type="button"
+                    onClick={() => setModalCategoriaAbierto(true)}
                     className="shrink-0 inline-flex items-center gap-1 text-xs font-medium text-sky-700 hover:text-sky-900 border border-sky-200 hover:bg-sky-50 px-2.5 py-1 rounded-md transition-colors"
                   >
                     + Crear
-                  </Link>
+                  </button>
                 </div>
               </div>
 
@@ -757,12 +743,13 @@ export default function NuevoProductoPage() {
                   <span className="text-xs text-gray-400 truncate">
                     {proveedores.length === 0 ? "Todavía no cargaste proveedores." : `${proveedores.length} disponibles`}
                   </span>
-                  <Link
-                    href="/proveedores/nuevo"
+                  <button
+                    type="button"
+                    onClick={() => setModalProveedorAbierto(true)}
                     className="shrink-0 inline-flex items-center gap-1 text-xs font-medium text-sky-700 hover:text-sky-900 border border-sky-200 hover:bg-sky-50 px-2.5 py-1 rounded-md transition-colors"
                   >
                     + Crear
-                  </Link>
+                  </button>
                 </div>
               </div>
 
@@ -966,6 +953,61 @@ export default function NuevoProductoPage() {
 
         </form>
       </div>
+
+      <CrearRapidoModal
+        open={modalCategoriaAbierto}
+        titulo="Nueva categoría"
+        placeholderNombre="Ej: BEBIDAS"
+        onCancel={() => setModalCategoriaAbierto(false)}
+        onCreate={async ({ nombre, descripcion }) => {
+          const res = await fetch("/api/inventario/categorias", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ nombre, descripcion }),
+          });
+          const json = await res.json().catch(() => ({} as Record<string, unknown>));
+          if (!res.ok || !json?.success) {
+            throw new Error((json as { error?: string }).error ?? "No se pudo crear la categoría.");
+          }
+          const cat = (json.data as { categoria?: { id: string; nombre: string } }).categoria;
+          if (!cat?.id) throw new Error("Respuesta inválida del servidor.");
+          return cat;
+        }}
+        onCreated={(cat) => {
+          setCategorias((prev) => [...prev, { id: cat.id, nombre: cat.nombre }]);
+          setCategoriaId(cat.id);
+          setModalCategoriaAbierto(false);
+        }}
+        mostrarDescripcion
+      />
+
+      <CrearRapidoModal
+        open={modalProveedorAbierto}
+        titulo="Nuevo proveedor"
+        placeholderNombre="Ej: DISTRIBUIDORA X"
+        onCancel={() => setModalProveedorAbierto(false)}
+        onCreate={async ({ nombre }) => {
+          const res = await fetch("/api/proveedores", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ nombre }),
+          });
+          const json = await res.json().catch(() => ({} as Record<string, unknown>));
+          if (!res.ok || !json?.success) {
+            throw new Error((json as { error?: string }).error ?? "No se pudo crear el proveedor.");
+          }
+          const prov = (json.data as { proveedor?: { id: string; nombre: string } }).proveedor;
+          if (!prov?.id) throw new Error("Respuesta inválida del servidor.");
+          return prov;
+        }}
+        onCreated={(prov) => {
+          setProveedores((prev) => [...prev, { id: prov.id, nombre: prov.nombre }]);
+          setProveedorId(prov.id);
+          setModalProveedorAbierto(false);
+        }}
+      />
 
     </div>
   );

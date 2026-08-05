@@ -8,20 +8,14 @@ import { getProducto, productoExiste, updateProducto } from "@/lib/inventario/st
 import type { MetodoValuacion, TipoIvaProducto } from "@/lib/inventario/types";
 import ProductImageUploader from "@/components/inventario/ProductImageUploader";
 import SelectFromList from "@/components/inventario/SelectFromList";
+import { CrearRapidoModal } from "@/components/inventario/CrearRapidoModal";
 import ProveedoresCostos from "@/components/inventario/ProveedoresCostos";
 import { MargenPorCanal } from "@/components/inventario/MargenPorCanal";
-import { ShoppingBag, Boxes, ClipboardList, type LucideIcon } from "lucide-react";
 
 // Opciones estándar de unidad de medida (UX simplificada gastro)
 const UNIDADES_OPCIONES = [
   "UNIDAD","KG","G","LT","ML","CAJA","BOLSA","PAQUETE","DOCENA","LATA","BOTELLA","PORCION","COMBO",
 ] as const;
-
-const TIPO_SUMMARY: Record<"reventa" | "menu" | "materia", { titulo: string; descripcion: string; Icon: LucideIcon; acento: string }> = {
-  reventa: { titulo: "Producto de reventa", descripcion: "Se compra y se vende tal cual. Controla stock y descuenta al vender.", Icon: ShoppingBag, acento: "text-sky-600" },
-  menu:    { titulo: "Producto del menú",   descripcion: "Se vende en Ventas y genera pedido. No descuenta stock directo.",     Icon: ClipboardList, acento: "text-amber-600" },
-  materia: { titulo: "Materia prima / insumo", descripcion: "Se usa para recetas y costeo. No aparece como producto de venta.", Icon: Boxes, acento: "text-emerald-600" },
-};
 
 interface CatRow { id: string; nombre: string }
 interface UbiRow { id: string; nombre: string; tipo: string }
@@ -75,28 +69,23 @@ export default function EditarProductoPage() {
   const [esVendible, setEsVendible] = useState(true);
   const [esInsumo, setEsInsumo] = useState(false);
 
-  // Tipo gastro inferido a partir de los flags (para UX simplificada)
+  // O&M Comercial vende siempre producto de reventa (no maneja recetas ni menu).
+  // Se hardcodea el tipo para no ensuciar la UI con selectores que no aplican.
+  // Downstream (guards de menu/materia) queda intacto por si otra instancia
+  // reutiliza este componente.
   type TipoGastro = "reventa" | "menu" | "materia";
-  const [tipoGastro, setTipoGastro] = useState<TipoGastro>("reventa");
+  const tipoGastro: TipoGastro = "reventa";
   // Si el producto tiene una receta asociada (para advertir al cambiar el tipo).
   const [tieneReceta, setTieneReceta] = useState(false);
   const [modoReceta, setModoReceta] = useState<"preparado_al_vender" | "produccion_previa">("preparado_al_vender");
+  const [modalCategoriaAbierto, setModalCategoriaAbierto] = useState(false);
+  const [modalProveedorAbierto, setModalProveedorAbierto] = useState(false);
 
   // Configuración gastronómica
   const [controlaStock, setControlaStock] = useState(true);
 
-  /** Cambia el tipo de producto y aplica los flags correctos (igual que en Nuevo producto). */
-  function aplicarTipoGastro(tipo: TipoGastro) {
-    setTipoGastro(tipo);
-    if (tipo === "reventa") {
-      setEsVendible(true); setEsInsumo(false); setControlaStock(true);
-    } else if (tipo === "menu") {
-      setEsVendible(true); setEsInsumo(false); setControlaStock(false);
-    } else {
-      // materia prima / insumo
-      setEsVendible(false); setEsInsumo(true); setControlaStock(false);
-    }
-  }
+  // aplicarTipoGastro se eliminó junto con el selector: O&M solo maneja
+  // producto de reventa, que se refleja en los flags iniciales del state.
   const [valorizado, setValorizado] = useState(true);
   const [unidadCompra, setUnidadCompra] = useState("");
   const [unidadReceta, setUnidadReceta] = useState("");
@@ -225,10 +214,8 @@ export default function EditarProductoPage() {
       setUnidadReceta(p.unidad_receta ?? "");
       setFactorCompraReceta(String(p.factor_compra_receta ?? 1));
       setTiempoPrepMinutos(String(p.tiempo_prep_minutos ?? 0));
-      // Inferir tipo gastro a partir de los flags
-      if (esIns) setTipoGastro("materia");
-      else if (esVend && !ctrlStock) setTipoGastro("menu");
-      else setTipoGastro("reventa");
+      // (Antes se inferia tipoGastro de los flags para pintar el selector; ahora
+      // es const="reventa" y no hay que setearlo.)
     }).finally(() => {
       if (!cancelled) setCargando(false);
     });
@@ -406,43 +393,9 @@ export default function EditarProductoPage() {
         <p className="text-gray-600">Modifica los datos del producto</p>
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 max-w-5xl">
-        <p className="text-xs uppercase tracking-wide font-semibold text-gray-500 mb-3">Tipo de producto</p>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {(["reventa", "materia", "menu"] as TipoGastro[]).map((t) => {
-            const s = TIPO_SUMMARY[t];
-            const activo = tipoGastro === t;
-            const Icon = s.Icon;
-            return (
-              <button
-                key={t}
-                type="button"
-                onClick={() => aplicarTipoGastro(t)}
-                className={`text-left rounded-lg border-2 p-3 transition-all ${
-                  activo ? "border-[#4FAEB2] bg-[#4FAEB2]/[0.06] shadow-sm" : "border-slate-200 hover:border-slate-300"
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <Icon className={`w-5 h-5 ${activo ? s.acento : "text-slate-400"}`} />
-                  <span className="text-sm font-semibold text-slate-900">{s.titulo}</span>
-                </div>
-                <p className="mt-1.5 text-xs text-slate-500 leading-snug">{s.descripcion}</p>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Advertencia: el producto tiene receta y se lo saca de Menú */}
-        {tieneReceta && tipoGastro !== "menu" && (
-          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            <span className="mt-0.5">⚠</span>
-            <span>
-              Este producto tiene una <strong>receta asociada</strong>. Al cambiarlo a
-              <strong> {tipoGastro === "reventa" ? "Reventa" : "Materia prima"}</strong>, la receta deja de aplicarse al vender
-              (no se borra). Revisá Recetas si querés ajustarla.
-            </span>
-          </div>
-        )}
+      {/* Card "Tipo de producto" removida: O&M vende siempre reventa. El bloque
+          "Modo de receta" queda oculto porque tipoGastro nunca es "menu". */}
+      <div className="hidden">
 
         {/* Modo de receta: solo para Menú con receta asociada */}
         {tipoGastro === "menu" && tieneReceta && (
@@ -661,12 +614,13 @@ export default function EditarProductoPage() {
                   <span className="text-xs text-gray-400 truncate">
                     {categorias.length === 0 ? "Todavía no cargaste categorías." : `${categorias.length} disponibles`}
                   </span>
-                  <Link
-                    href="/inventario/categorias"
+                  <button
+                    type="button"
+                    onClick={() => setModalCategoriaAbierto(true)}
                     className="shrink-0 inline-flex items-center gap-1 text-xs font-medium text-sky-700 hover:text-sky-900 border border-sky-200 hover:bg-sky-50 px-2.5 py-1 rounded-md transition-colors"
                   >
                     + Crear
-                  </Link>
+                  </button>
                 </div>
               </div>
               <div className={`md:col-span-4 min-w-0 ${tipoGastro === "menu" ? "hidden" : ""}`}>
@@ -681,12 +635,13 @@ export default function EditarProductoPage() {
                   <span className="text-xs text-gray-400 truncate">
                     {proveedores.length === 0 ? "Todavía no cargaste proveedores." : `${proveedores.length} disponibles`}
                   </span>
-                  <Link
-                    href="/proveedores/nuevo"
+                  <button
+                    type="button"
+                    onClick={() => setModalProveedorAbierto(true)}
                     className="shrink-0 inline-flex items-center gap-1 text-xs font-medium text-sky-700 hover:text-sky-900 border border-sky-200 hover:bg-sky-50 px-2.5 py-1 rounded-md transition-colors"
                   >
                     + Crear
-                  </Link>
+                  </button>
                 </div>
               </div>
               {/* Ubicación principal — oculta en instancia En lo de Mari (no aplica para gastronomía). */}
@@ -983,6 +938,61 @@ export default function EditarProductoPage() {
       </div>
 
       {id && <ProveedoresCostos productoId={id} />}
+
+      <CrearRapidoModal
+        open={modalCategoriaAbierto}
+        titulo="Nueva categoría"
+        placeholderNombre="Ej: BEBIDAS"
+        onCancel={() => setModalCategoriaAbierto(false)}
+        onCreate={async ({ nombre, descripcion }) => {
+          const res = await fetch("/api/inventario/categorias", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ nombre, descripcion }),
+          });
+          const json = await res.json().catch(() => ({} as Record<string, unknown>));
+          if (!res.ok || !json?.success) {
+            throw new Error((json as { error?: string }).error ?? "No se pudo crear la categoría.");
+          }
+          const cat = (json.data as { categoria?: { id: string; nombre: string } }).categoria;
+          if (!cat?.id) throw new Error("Respuesta inválida del servidor.");
+          return cat;
+        }}
+        onCreated={(cat) => {
+          setCategorias((prev) => [...prev, { id: cat.id, nombre: cat.nombre }]);
+          setCategoriaId(cat.id);
+          setModalCategoriaAbierto(false);
+        }}
+        mostrarDescripcion
+      />
+
+      <CrearRapidoModal
+        open={modalProveedorAbierto}
+        titulo="Nuevo proveedor"
+        placeholderNombre="Ej: DISTRIBUIDORA X"
+        onCancel={() => setModalProveedorAbierto(false)}
+        onCreate={async ({ nombre }) => {
+          const res = await fetch("/api/proveedores", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ nombre }),
+          });
+          const json = await res.json().catch(() => ({} as Record<string, unknown>));
+          if (!res.ok || !json?.success) {
+            throw new Error((json as { error?: string }).error ?? "No se pudo crear el proveedor.");
+          }
+          const prov = (json.data as { proveedor?: { id: string; nombre: string } }).proveedor;
+          if (!prov?.id) throw new Error("Respuesta inválida del servidor.");
+          return prov;
+        }}
+        onCreated={(prov) => {
+          setProveedores((prev) => [...prev, { id: prov.id, nombre: prov.nombre }]);
+          setProveedorId(prov.id);
+          setModalProveedorAbierto(false);
+        }}
+      />
     </div>
   );
 }
