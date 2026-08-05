@@ -73,8 +73,12 @@ export default function EditarProductoPage() {
   // Se hardcodea el tipo para no ensuciar la UI con selectores que no aplican.
   // Downstream (guards de menu/materia) queda intacto por si otra instancia
   // reutiliza este componente.
+  //
+  // Se widens con `as TipoGastro` para que TS no narrowa a `"reventa"` literal:
+  // sin esto, comparaciones downstream como `tipoGastro !== "materia"` disparan
+  // "unintentional comparison" (siempre true) y voltean el build.
   type TipoGastro = "reventa" | "menu" | "materia";
-  const tipoGastro: TipoGastro = "reventa";
+  const tipoGastro = "reventa" as TipoGastro;
   // Si el producto tiene una receta asociada (para advertir al cambiar el tipo).
   const [tieneReceta, setTieneReceta] = useState(false);
   const [modoReceta, setModoReceta] = useState<"preparado_al_vender" | "produccion_previa">("preparado_al_vender");

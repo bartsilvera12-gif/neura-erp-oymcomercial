@@ -64,8 +64,11 @@ export default function NuevoProductoPage() {
    * y el tipo queda fijo. Se conserva la constante porque el resto del
    * formulario decide con ella qué campos mostrar.
    */
+  // Widens con `as TipoGastro` para no romper el build cuando TS narrowa a
+  // "reventa" literal y detecta comparaciones downstream que ahora son siempre
+  // true/false (queda por si otra instancia rearma el selector).
   type TipoGastro = "reventa" | "menu" | "materia";
-  const tipoGastro: TipoGastro = "reventa";
+  const tipoGastro = "reventa" as TipoGastro;
 
   // Configuración gastronómica
   const [controlaStock, setControlaStock] = useState(true);

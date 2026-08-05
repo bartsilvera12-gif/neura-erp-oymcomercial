@@ -126,9 +126,11 @@ export default function NuevaCompraPage() {
 
   const [mostrarFormProducto, setMostrarFormProducto] = useState(false);
   const [formProducto, setFormProducto] = useState({
-    nombre: "", sku: "", unidad_medida: "Unidad", metodo_valuacion: "CPP" as MetodoValuacion,
+    nombre: "", sku: "", codigo_barras: "", unidad_medida: "Unidad",
+    metodo_valuacion: "CPP" as MetodoValuacion,
     stock_minimo: "0", precio_venta_sugerido: "", tipo: "reventa" as "reventa" | "menu" | "materia",
   });
+  const [generandoBarrasCompra, setGenerandoBarrasCompra] = useState(false);
   const [errorSku, setErrorSku] = useState<string | null>(null);
   const [productoCreado, setProductoCreado] = useState<string | null>(null);
 
@@ -354,8 +356,13 @@ export default function NuevaCompraPage() {
         : formProducto.tipo === "menu"
         ? { es_vendible: true, es_insumo: false, controla_stock: false }
         : { es_vendible: true, es_insumo: false, controla_stock: true };
+    const codigoBarrasLimpio = formProducto.codigo_barras.trim().toUpperCase();
     const creado = await saveProducto({
       nombre: formProducto.nombre.trim().toUpperCase(), sku: formProducto.sku.trim().toUpperCase(),
+      codigo_barras: codigoBarrasLimpio || null,
+      // Al escanear/tipear un codigo se asume real (no interno). El toggle de
+      // "interno" no vale la pena para la alta rapida desde compras.
+      codigo_barras_interno: false,
       unidad_medida: formProducto.unidad_medida.toUpperCase(), metodo_valuacion: formProducto.metodo_valuacion,
       stock_actual: 0, stock_minimo: parseInt(formProducto.stock_minimo) || 0,
       costo_promedio: nlCostoPYG || 0, precio_venta: parseFloat(formProducto.precio_venta_sugerido) || 0,
@@ -373,11 +380,11 @@ export default function NuevaCompraPage() {
     }));
     setProductoCreado(creado.nombre);
     setMostrarFormProducto(false);
-    setFormProducto({ nombre: "", sku: "", unidad_medida: "Unidad", metodo_valuacion: "CPP", stock_minimo: "0", precio_venta_sugerido: "", tipo: "reventa" });
+    setFormProducto({ nombre: "", sku: "", codigo_barras: "", unidad_medida: "Unidad", metodo_valuacion: "CPP", stock_minimo: "0", precio_venta_sugerido: "", tipo: "reventa" });
   }
   function handleCancelarProducto() {
     setMostrarFormProducto(false);
-    setFormProducto({ nombre: "", sku: "", unidad_medida: "Unidad", metodo_valuacion: "CPP", stock_minimo: "0", precio_venta_sugerido: "", tipo: "reventa" });
+    setFormProducto({ nombre: "", sku: "", codigo_barras: "", unidad_medida: "Unidad", metodo_valuacion: "CPP", stock_minimo: "0", precio_venta_sugerido: "", tipo: "reventa" });
     setErrorSku(null);
   }
 
@@ -656,6 +663,43 @@ export default function NuevaCompraPage() {
                         <input type="text" name="sku" value={formProducto.sku} onChange={handleProductoInputChange}
                           placeholder="Ej: CHIA-500" className={`${inputSmClass} uppercase ${errorSku ? "border-red-300 bg-red-50" : ""}`} />
                         {errorSku && <p className="mt-1 text-xs text-red-600">{errorSku}</p>}
+                      </div>
+                      <div className="col-span-2">
+                        <label className={labelSmClass}>Código de barras</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            name="codigo_barras"
+                            value={formProducto.codigo_barras}
+                            onChange={handleProductoInputChange}
+                            placeholder="Escaneá o tipeá el código (opcional)"
+                            className={`${inputSmClass} font-mono uppercase flex-1`}
+                            autoComplete="off"
+                            inputMode="numeric"
+                          />
+                          <button
+                            type="button"
+                            disabled={generandoBarrasCompra}
+                            onClick={async () => {
+                              if (generandoBarrasCompra) return;
+                              setGenerandoBarrasCompra(true);
+                              try {
+                                const res = await fetch("/api/productos/codigo-barras", { method: "POST", credentials: "include" });
+                                const json = await res.json().catch(() => ({} as Record<string, unknown>));
+                                const codigo = (json as { data?: { codigo?: string }; success?: boolean }).success
+                                  ? (json as { data?: { codigo?: string } }).data?.codigo
+                                  : null;
+                                if (codigo) {
+                                  setFormProducto((prev) => ({ ...prev, codigo_barras: codigo }));
+                                }
+                              } catch { /* silencioso: el usuario puede tipear */ }
+                              finally { setGenerandoBarrasCompra(false); }
+                            }}
+                            className="shrink-0 rounded-md border border-sky-200 bg-white px-2.5 py-1.5 text-xs font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-50"
+                          >
+                            {generandoBarrasCompra ? "…" : "Generar"}
+                          </button>
+                        </div>
                       </div>
                       <div>
                         <label className={labelSmClass}>Unidad de medida</label>
