@@ -48,17 +48,23 @@ export function membreteA4(origin = ""): string {
 }
 
 /**
- * Membrete compacto para ticket angosto (58/80mm): logo arriba, datos centrados.
+ * Membrete compacto para ticket angosto (58/80mm): datos del negocio centrados.
+ *
+ * Sin logo: los térmicos suelen imprimir imágenes con muy poca definición y el
+ * PNG salia manchado en vez de nitido. Se prioriza texto en negrita, que en
+ * papel termico se lee mejor y consume menos tinta/energia de cabezal.
+ *
+ * `origin` se mantiene en la firma para no romper callers, aunque ya no se usa
+ * (el logo era el unico consumidor).
  */
-export function membreteTicket(origin = ""): string {
+export function membreteTicket(_origin = ""): string {
+  void _origin;
   const e = EMPRESA_DOC;
-  const logo = origin ? `${origin}${e.logoUrl}` : e.logoUrl;
   return `
   <div style="text-align:center;padding-bottom:6px;margin-bottom:6px;border-bottom:1px dashed #000;">
-    <img src="${esc(logo)}" alt="${esc(e.nombre)}" style="max-width:150px;max-height:72px;width:auto;height:auto;object-fit:contain;display:inline-block;margin:0 auto 4px;" />
-    <div style="font-weight:700;font-size:12px;">${esc(e.nombre)}</div>
-    <div style="font-size:10px;">Tel: ${esc(e.telefono)}</div>
-    <div style="font-size:10px;">${esc(e.direccion[0])}</div>
-    <div style="font-size:10px;">${esc(e.direccion.slice(1).join(" · "))}</div>
+    <div style="font-weight:900;font-size:15px;letter-spacing:0.5px;">${esc(e.nombre)}</div>
+    <div style="font-weight:700;font-size:11px;">Tel: ${esc(e.telefono)}</div>
+    <div style="font-weight:700;font-size:11px;">${esc(e.direccion[0])}</div>
+    <div style="font-weight:700;font-size:11px;">${esc(e.direccion.slice(1).join(" · "))}</div>
   </div>`;
 }
