@@ -27,6 +27,10 @@ interface BodyItem {
   presentacion_id?: string | null;
   presentacion_nombre?: string | null;
   presentacion_cantidad_base?: number | null;
+  // Peso: cantidad = peso en kg, precio_venta = precio por kg.
+  modalidad?: "entero" | "recortado" | null;
+  unidad_venta?: string | null;
+  controlado_por_peso?: boolean | null;
 }
 
 interface PostBody {
@@ -121,6 +125,12 @@ export async function POST(request: NextRequest) {
           it.presentacion_cantidad_base != null
             ? Number(it.presentacion_cantidad_base)
             : null,
+        modalidad:
+          it.modalidad === "entero" || it.modalidad === "recortado"
+            ? it.modalidad
+            : null,
+        unidad_venta: it.unidad_venta ?? null,
+        controlado_por_peso: it.controlado_por_peso === true,
       }));
     if (items.length === 0) {
       return NextResponse.json(errorResponse("Los productos no son válidos (cantidad debe ser > 0)."), { status: 400 });

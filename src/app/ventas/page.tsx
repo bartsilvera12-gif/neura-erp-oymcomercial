@@ -438,6 +438,7 @@ export default function CajaPage() {
       const precioNum = Number(it.precio_venta) || 0;
       const tipoIva: TipoIvaVenta =
         it.tipo_iva === "EXENTA" || it.tipo_iva === "5%" ? it.tipo_iva : "10%";
+      const esPeso = it.controlado_por_peso === true || it.modalidad === "entero" || it.modalidad === "recortado";
       return {
         cart_line_id: nextCartLineId(),
         producto_id: it.producto_id,
@@ -450,6 +451,11 @@ export default function CajaPage() {
         precio_mayorista: 0,
         cantidad_minima_mayorista: null,
         tipo_iva: tipoIva,
+        // Preservar peso/modalidad — el pedido las trae del /pedidos/nuevo y
+        // el ticket + factura las necesitan para pintar "0.3 KG × Gs/KG".
+        modalidad: esPeso && (it.modalidad === "entero" || it.modalidad === "recortado") ? it.modalidad : undefined,
+        unidad_venta: esPeso ? (it.unidad_venta ?? "KG") : undefined,
+        controlado_por_peso: esPeso ? true : undefined,
       };
     });
     setCart(nuevosItems);

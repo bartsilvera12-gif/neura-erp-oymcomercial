@@ -25,6 +25,11 @@ export interface PedidoCajaItem {
   presentacion_id?: string | null;
   presentacion_nombre?: string | null;
   presentacion_cantidad_base?: number | null;
+  // Productos por peso (queso, jamón fraccionable). Cuando modalidad viene,
+  // cantidad = peso en kg y precio_venta = precio por kg. Unidad_venta = "KG".
+  modalidad?: "entero" | "recortado" | null;
+  unidad_venta?: string | null;
+  controlado_por_peso?: boolean;
 }
 
 export interface PedidoCaja {

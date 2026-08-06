@@ -30,6 +30,9 @@ import {
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import { getClientes } from "@/lib/clientes/storage";
 import type { Cliente } from "@/lib/clientes/types";
+import { PesoModal, type PesoModalProducto, type PesoModalResult } from "@/components/ventas/PesoModal";
+
+type ModalidadPeso = "entero" | "recortado";
 
 type PresentacionLite = {
   id: string;
@@ -50,6 +53,13 @@ type ProductoHit = {
   stock_actual: number;
   unidad_medida: string;
   imagen_url: string | null;
+  // Peso: si controlado_por_peso, al agregar se abre PesoModal para pedir
+  // modalidad (entero/recortado) y peso en kg. Los precios/kg son por
+  // modalidad, no aplican mayorista/distribuidor.
+  controlado_por_peso: boolean;
+  modalidades_activas: ModalidadPeso[];
+  precio_kg_entero: number | null;
+  precio_kg_recortado: number | null;
 };
 
 type CartItem = {
@@ -71,6 +81,11 @@ type CartItem = {
   presentacion_cantidad_base: number | null;
   // Cache de presentaciones del producto para el selector inline.
   presentaciones: PresentacionLite[];
+  // Peso: cuando modalidad viene, cantidad = peso en kg y precio_venta = precio/kg.
+  // Se llenan al confirmar el PesoModal. Undefined en items por unidad.
+  controlado_por_peso?: boolean;
+  modalidad?: ModalidadPeso;
+  unidad_venta?: string;
 };
 
 
@@ -113,6 +128,9 @@ export default function NuevoPedidoPage() {
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  // Modal de peso: se abre cuando el producto elegido es controlado_por_peso
+  // (queso, jamón fraccionable). Al confirmar, cablea agregarConPeso().
+  const [pesoProducto, setPesoProducto] = useState<PesoModalProducto | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const searchBoxRef = useRef<HTMLDivElement>(null);
 
@@ -134,18 +152,28 @@ export default function NuevoPedidoPage() {
         const j = await res.json();
         if (cancel) return;
         const items = ((j?.data?.items ?? []) as Record<string, unknown>[]).map(
-          (p) => ({
-            id: String(p.id),
-            nombre: String(p.nombre ?? ""),
-            sku: String(p.sku ?? ""),
-            precio_venta: Number(p.precio_venta) || 0,
-            precio_mayorista: Number(p.precio_mayorista) || 0,
-            precio_distribuidor:
-              p.precio_distribuidor == null ? null : Number(p.precio_distribuidor),
-            stock_actual: Number(p.stock_actual) || 0,
-            unidad_medida: String(p.unidad_medida ?? "Unidad"),
-            imagen_url: (p.imagen_url as string | null) ?? null,
-          })
+          (p) => {
+            const modsRaw = Array.isArray(p.modalidades_activas) ? p.modalidades_activas : [];
+            const modalidades = (modsRaw as unknown[]).filter(
+              (m): m is ModalidadPeso => m === "entero" || m === "recortado"
+            );
+            return {
+              id: String(p.id),
+              nombre: String(p.nombre ?? ""),
+              sku: String(p.sku ?? ""),
+              precio_venta: Number(p.precio_venta) || 0,
+              precio_mayorista: Number(p.precio_mayorista) || 0,
+              precio_distribuidor:
+                p.precio_distribuidor == null ? null : Number(p.precio_distribuidor),
+              stock_actual: Number(p.stock_actual) || 0,
+              unidad_medida: String(p.unidad_medida ?? "Unidad"),
+              imagen_url: (p.imagen_url as string | null) ?? null,
+              controlado_por_peso: p.controlado_por_peso === true,
+              modalidades_activas: modalidades,
+              precio_kg_entero: p.precio_kg_entero != null ? Number(p.precio_kg_entero) : null,
+              precio_kg_recortado: p.precio_kg_recortado != null ? Number(p.precio_kg_recortado) : null,
+            };
+          }
         );
         setHits(items);
       } finally {
@@ -190,6 +218,28 @@ export default function NuevoPedidoPage() {
   }
 
   async function addToCart(p: ProductoHit) {
+    // Producto por peso: NO se agrega directo. Abre el modal para pedir
+    // modalidad (entero/recortado) + peso en kg. Si el producto ya está en
+    // el carrito, el modal reemplaza esa línea al confirmar (permite ajustar
+    // el peso o cambiar modalidad sin borrar y volver a buscar).
+    if (p.controlado_por_peso) {
+      if (p.modalidades_activas.length === 0) {
+        setErrMsg("Producto por peso sin modalidades activas — revisá su ficha en Inventario.");
+        return;
+      }
+      setPesoProducto({
+        id: p.id,
+        sku: p.sku,
+        nombre: p.nombre,
+        stock_actual: p.stock_actual,
+        modalidades_activas: p.modalidades_activas,
+        precio_kg_entero: p.precio_kg_entero,
+        precio_kg_recortado: p.precio_kg_recortado,
+      });
+      setOkMsg(null);
+      setErrMsg(null);
+      return;
+    }
     // Si ya esta en el carrito, sumamos +1.
     const ex = cart.find((x) => x.producto_id === p.id);
     if (ex) {
@@ -227,6 +277,48 @@ export default function NuevoPedidoPage() {
         presentaciones: pres,
       },
     ]);
+    setOkMsg(null);
+    setErrMsg(null);
+  }
+
+  /** Confirmación del PesoModal: crea (o reemplaza) la línea del producto
+   *  con modalidad + peso en kg + precio/kg. Un pedido guarda una única
+   *  línea por producto por peso (a diferencia del POS, donde cada pesada
+   *  es una línea propia): el cajero puede reajustar el peso final al cobrar. */
+  function agregarConPeso(result: PesoModalResult) {
+    if (!pesoProducto) return;
+    const p = pesoProducto;
+    setCart((prev) => {
+      const nueva: CartItem = {
+        producto_id: p.id,
+        producto_nombre: p.nombre,
+        sku: p.sku,
+        stock_actual: p.stock_actual,
+        unidad_medida: "KG",
+        cantidad: result.peso,
+        tipo_precio: "minorista",
+        tipo_iva: "10%",
+        precio_venta: result.precioKg,
+        precio_mayorista: 0,
+        precio_distribuidor: 0,
+        imagen_url: null,
+        presentacion_id: null,
+        presentacion_nombre: null,
+        presentacion_cantidad_base: null,
+        presentaciones: [],
+        controlado_por_peso: true,
+        modalidad: result.modalidad,
+        unidad_venta: "KG",
+      };
+      const idx = prev.findIndex((x) => x.producto_id === p.id);
+      if (idx >= 0) {
+        const copy = prev.slice();
+        copy[idx] = { ...copy[idx], ...nueva };
+        return copy;
+      }
+      return [...prev, nueva];
+    });
+    setPesoProducto(null);
     setOkMsg(null);
     setErrMsg(null);
   }
@@ -361,6 +453,9 @@ export default function NuevoPedidoPage() {
           presentacion_id: it.presentacion_id,
           presentacion_nombre: it.presentacion_nombre,
           presentacion_cantidad_base: it.presentacion_cantidad_base,
+          modalidad: it.modalidad ?? null,
+          unidad_venta: it.unidad_venta ?? null,
+          controlado_por_peso: it.controlado_por_peso === true,
         })),
       };
       const r = await fetchWithSupabaseSession("/api/pedidos-caja", {
@@ -538,6 +633,7 @@ export default function NuevoPedidoPage() {
               <tbody className="divide-y divide-slate-100">
                 {cart.map((it) => {
                   const cantBase = it.presentacion_cantidad_base ?? 1;
+                  const esPeso = it.controlado_por_peso === true;
                   return (
                     <tr key={it.producto_id} className="align-middle transition-colors hover:bg-[#4FAEB2]/5">
                       {/* Producto */}
@@ -547,14 +643,22 @@ export default function NuevoPedidoPage() {
                           <div className="min-w-0">
                             <p className="font-semibold text-slate-900 leading-snug">{it.producto_nombre}</p>
                             <p className="text-[11px] font-mono text-slate-500">{it.sku}</p>
-                            {cantBase !== 1 && (
+                            {esPeso && (
+                              <p className="text-[11px] font-semibold text-[#3F8E91] uppercase tracking-wide">
+                                {it.modalidad === "recortado" ? "Recortado" : "Entero"} · por kg
+                              </p>
+                            )}
+                            {!esPeso && cantBase !== 1 && (
                               <p className="text-[11px] text-slate-500 tabular-nums">= {it.cantidad * cantBase} {it.unidad_medida}</p>
                             )}
                           </div>
                         </div>
                       </td>
-                      {/* Presentación */}
+                      {/* Presentación (N/A en peso) */}
                       <td className="px-3 py-3">
+                        {esPeso ? (
+                          <span className="text-[11px] text-slate-400">—</span>
+                        ) : (
                         <select
                           value={it.presentacion_id ?? ""}
                           onChange={(e) => changePresentacion(it.producto_id, e.target.value)}
@@ -572,9 +676,13 @@ export default function NuevoPedidoPage() {
                             ))
                           )}
                         </select>
+                        )}
                       </td>
-                      {/* Tipo de precio */}
+                      {/* Tipo de precio (N/A en peso: precio/kg viene fijo por modalidad) */}
                       <td className="px-3 py-3">
+                        {esPeso ? (
+                          <span className="text-[11px] text-slate-400">—</span>
+                        ) : (
                         <div className="inline-flex overflow-hidden rounded-lg border border-slate-200">
                           {(["minorista", "mayorista", "distribuidor"] as const).map((t) => {
                             const sel = it.tipo_precio === t;
@@ -592,6 +700,7 @@ export default function NuevoPedidoPage() {
                             );
                           })}
                         </div>
+                        )}
                       </td>
                       {/* IVA */}
                       <td className="px-3 py-3">
@@ -613,8 +722,21 @@ export default function NuevoPedidoPage() {
                           })}
                         </div>
                       </td>
-                      {/* Cantidad */}
+                      {/* Cantidad — para peso: input decimal en kg (sin +/-) */}
                       <td className="px-3 py-3">
+                        {esPeso ? (
+                          <div className="mx-auto flex w-fit items-center rounded-md border border-slate-200 bg-white">
+                            <input
+                              type="number"
+                              min={0}
+                              step="0.001"
+                              value={it.cantidad}
+                              onChange={(e) => updateCart(it.producto_id, { cantidad: Math.max(0, Number(e.target.value) || 0) })}
+                              className="h-8 w-16 text-right text-sm tabular-nums outline-none px-1"
+                            />
+                            <span className="pr-2 text-[11px] font-semibold text-slate-500">kg</span>
+                          </div>
+                        ) : (
                         <div className="mx-auto flex w-fit items-center rounded-md border border-slate-200 bg-white">
                           <button onClick={() => changeCantidad(it.producto_id, -1)} className="h-8 w-8 rounded-l-md text-slate-500 hover:bg-slate-100">
                             <Minus className="mx-auto h-3.5 w-3.5" />
@@ -630,16 +752,20 @@ export default function NuevoPedidoPage() {
                             <Plus className="mx-auto h-3.5 w-3.5" />
                           </button>
                         </div>
+                        )}
                       </td>
-                      {/* Precio unitario */}
+                      {/* Precio unitario (por kg en peso) */}
                       <td className="px-3 py-3 text-right">
-                        <input
-                          type="number"
-                          min={0}
-                          value={it.precio_venta}
-                          onChange={(e) => updateCart(it.producto_id, { precio_venta: Math.max(0, Number(e.target.value) || 0) })}
-                          className="h-8 w-28 rounded-md border border-slate-200 bg-white px-2 text-right text-sm tabular-nums"
-                        />
+                        <div className="inline-flex items-center gap-1">
+                          <input
+                            type="number"
+                            min={0}
+                            value={it.precio_venta}
+                            onChange={(e) => updateCart(it.producto_id, { precio_venta: Math.max(0, Number(e.target.value) || 0) })}
+                            className="h-8 w-28 rounded-md border border-slate-200 bg-white px-2 text-right text-sm tabular-nums"
+                          />
+                          {esPeso && <span className="text-[11px] text-slate-500">/kg</span>}
+                        </div>
                       </td>
                       {/* Subtotal */}
                       <td className="px-4 py-3 text-right">
@@ -739,6 +865,13 @@ export default function NuevoPedidoPage() {
           </div>
         </div>
       )}
+
+      {/* Modal de peso: se abre al elegir un producto controlado_por_peso. */}
+      <PesoModal
+        producto={pesoProducto}
+        onCancel={() => setPesoProducto(null)}
+        onConfirm={agregarConPeso}
+      />
     </div>
   );
 }

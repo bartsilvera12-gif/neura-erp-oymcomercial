@@ -21,6 +21,7 @@ function mapItems(raw: unknown): PedidoCajaItem[] {
     const r = (x ?? {}) as Record<string, unknown>;
     const tp = r.tipo_precio;
     const ti = r.tipo_iva;
+    const mod = r.modalidad;
     return {
       producto_id: String(r.producto_id ?? ""),
       producto_nombre: String(r.producto_nombre ?? ""),
@@ -38,6 +39,9 @@ function mapItems(raw: unknown): PedidoCajaItem[] {
         r.presentacion_cantidad_base == null
           ? null
           : num(r.presentacion_cantidad_base),
+      modalidad: mod === "entero" || mod === "recortado" ? mod : null,
+      unidad_venta: r.unidad_venta == null ? null : String(r.unidad_venta),
+      controlado_por_peso: r.controlado_por_peso === true,
     };
   });
 }
