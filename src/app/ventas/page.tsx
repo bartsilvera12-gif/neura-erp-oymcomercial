@@ -505,10 +505,15 @@ export default function CajaPage() {
     setCobrando(true);
     setCobroError(null);
     try {
+      // Solo ticket = comprobante interno no fiscal → IVA EXENTA en todas las
+      // líneas sin importar el tipo_iva del producto. Cuando emite factura
+      // (talonario / factura ERP) usamos el IVA real de cada producto.
+      const forzarExenta = datosVenta.documento === "ticket";
       const items: LineaVenta[] = cart.map((it) => {
         const precio = precioEfectivo(it);
         const totalLinea = it.cantidad * precio;
-        const montoIva = calcIva(it.tipo_iva, totalLinea);
+        const tipoIvaEfectivo: TipoIvaVenta = forzarExenta ? "EXENTA" : it.tipo_iva;
+        const montoIva = calcIva(tipoIvaEfectivo, totalLinea);
         const esPeso = it.controlado_por_peso === true && !!it.modalidad;
         return {
           producto_id: it.producto_id,
@@ -517,7 +522,7 @@ export default function CajaPage() {
           cantidad: it.cantidad,
           precio_venta_original: precio,
           precio_venta: precio,
-          tipo_iva: it.tipo_iva,
+          tipo_iva: tipoIvaEfectivo,
           // Peso: no aplica el toggle mayorista (esMayoristaAplicado devuelve
           // false porque precio_mayorista=0), pero blindamos con la guarda.
           tipo_precio: !esPeso && esMayoristaAplicado(it) ? "mayorista" : "minorista",
