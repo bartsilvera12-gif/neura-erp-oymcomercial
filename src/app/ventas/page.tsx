@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Loader2, Package, Search, Trash2 } from "lucide-react";
 import CajaControlPanel from "@/components/caja/CajaControlPanel";
 import MontoInput, { parseMontoInput } from "@/components/ui/MontoInput";
+import { QtyInput } from "@/components/ui/QtyInput";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import { saveVenta } from "@/lib/ventas/storage";
 import type { LineaVenta, MetodoPago, TipoIvaVenta } from "@/lib/ventas/types";
@@ -853,24 +854,9 @@ export default function CajaPage() {
                                   className="h-7 w-7 rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                                   aria-label="Menos"
                                 >−</button>
-                                <input
-                                  type="number"
-                                  min={1}
+                                <QtyInput
                                   value={it.cantidad}
-                                  onFocus={(e) => e.currentTarget.select()}
-                                  onChange={(e) => {
-                                    // Permitir campo vacío mientras la cajera reescribe:
-                                    // solo commiteamos cuando hay un entero valido >= 1.
-                                    const raw = e.target.value;
-                                    if (raw === "") return;
-                                    const n = parseInt(raw, 10);
-                                    if (Number.isFinite(n) && n >= 1) updateCant(it.cart_line_id, n);
-                                  }}
-                                  onBlur={(e) => {
-                                    // Si quedó vacío/cero al perder foco, restauramos a 1.
-                                    const n = parseInt(e.target.value, 10);
-                                    if (!Number.isFinite(n) || n < 1) updateCant(it.cart_line_id, 1);
-                                  }}
+                                  onChange={(n) => updateCant(it.cart_line_id, n)}
                                   className="h-7 w-14 rounded-md border border-slate-200 bg-white text-center text-sm tabular-nums"
                                 />
                                 <button

@@ -31,6 +31,7 @@ import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session"
 import { getClientes } from "@/lib/clientes/storage";
 import type { Cliente } from "@/lib/clientes/types";
 import { PesoModal, type PesoModalProducto, type PesoModalResult } from "@/components/ventas/PesoModal";
+import { QtyInput } from "@/components/ui/QtyInput";
 
 type ModalidadPeso = "entero" | "recortado";
 
@@ -726,12 +727,11 @@ export default function NuevoPedidoPage() {
                       <td className="px-3 py-3">
                         {esPeso ? (
                           <div className="mx-auto flex w-fit items-center rounded-md border border-slate-200 bg-white">
-                            <input
-                              type="number"
-                              min={0}
-                              step="0.001"
+                            <QtyInput
                               value={it.cantidad}
-                              onChange={(e) => updateCart(it.producto_id, { cantidad: Math.max(0, Number(e.target.value) || 0) })}
+                              onChange={(n) => updateCart(it.producto_id, { cantidad: n })}
+                              min={0.001}
+                              step="any"
                               className="h-8 w-16 text-right text-sm tabular-nums outline-none px-1"
                             />
                             <span className="pr-2 text-[11px] font-semibold text-slate-500">kg</span>
@@ -741,21 +741,9 @@ export default function NuevoPedidoPage() {
                           <button onClick={() => changeCantidad(it.producto_id, -1)} className="h-8 w-8 rounded-l-md text-slate-500 hover:bg-slate-100">
                             <Minus className="mx-auto h-3.5 w-3.5" />
                           </button>
-                          <input
-                            type="number"
-                            min={1}
+                          <QtyInput
                             value={it.cantidad}
-                            onFocus={(e) => e.currentTarget.select()}
-                            onChange={(e) => {
-                              const raw = e.target.value;
-                              if (raw === "") return;
-                              const n = parseInt(raw, 10);
-                              if (Number.isFinite(n) && n >= 1) updateCart(it.producto_id, { cantidad: n });
-                            }}
-                            onBlur={(e) => {
-                              const n = parseInt(e.target.value, 10);
-                              if (!Number.isFinite(n) || n < 1) updateCart(it.producto_id, { cantidad: 1 });
-                            }}
+                            onChange={(n) => updateCart(it.producto_id, { cantidad: n })}
                             className="h-8 w-12 text-center text-sm tabular-nums outline-none"
                           />
                           <button onClick={() => changeCantidad(it.producto_id, 1)} className="h-8 w-8 rounded-r-md text-slate-500 hover:bg-slate-100">
