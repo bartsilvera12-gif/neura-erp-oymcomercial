@@ -745,7 +745,17 @@ export default function NuevoPedidoPage() {
                             type="number"
                             min={1}
                             value={it.cantidad}
-                            onChange={(e) => updateCart(it.producto_id, { cantidad: Math.max(1, parseInt(e.target.value) || 1) })}
+                            onFocus={(e) => e.currentTarget.select()}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              if (raw === "") return;
+                              const n = parseInt(raw, 10);
+                              if (Number.isFinite(n) && n >= 1) updateCart(it.producto_id, { cantidad: n });
+                            }}
+                            onBlur={(e) => {
+                              const n = parseInt(e.target.value, 10);
+                              if (!Number.isFinite(n) || n < 1) updateCart(it.producto_id, { cantidad: 1 });
+                            }}
                             className="h-8 w-12 text-center text-sm tabular-nums outline-none"
                           />
                           <button onClick={() => changeCantidad(it.producto_id, 1)} className="h-8 w-8 rounded-r-md text-slate-500 hover:bg-slate-100">
