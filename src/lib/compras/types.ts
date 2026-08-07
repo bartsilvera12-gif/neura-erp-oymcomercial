@@ -2,7 +2,7 @@ export type TipoPago = "contado" | "credito";
 export type TipoIva = "exenta" | "5" | "10";
 export type Moneda = "PYG" | "USD";
 /** Método de pago (cómo se pagó). Distinto a TipoPago (contado/crédito, plazo). */
-export type MetodoPago = "efectivo" | "transferencia" | "tarjeta";
+export type MetodoPago = "efectivo" | "transferencia" | "tarjeta" | "cheque";
 
 export interface Compra {
   id: string;

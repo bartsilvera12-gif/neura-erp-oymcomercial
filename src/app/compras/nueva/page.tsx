@@ -103,7 +103,7 @@ export default function NuevaCompraPage() {
     moneda: "PYG" as Moneda,
     tipo_cambio: "",
     fecha_factura: "" as string,
-    metodo_pago: "" as "" | "efectivo" | "transferencia" | "tarjeta",
+    metodo_pago: "" as "" | "efectivo" | "transferencia" | "tarjeta" | "cheque",
   });
 
   // Líneas ya agregadas
@@ -515,7 +515,8 @@ export default function NuevaCompraPage() {
                       metodo_pago:
                         e.target.value === "efectivo" ||
                         e.target.value === "transferencia" ||
-                        e.target.value === "tarjeta"
+                        e.target.value === "tarjeta" ||
+                        e.target.value === "cheque"
                           ? e.target.value
                           : "",
                     }))
@@ -526,6 +527,7 @@ export default function NuevaCompraPage() {
                   <option value="efectivo">Efectivo</option>
                   <option value="transferencia">Transferencia</option>
                   <option value="tarjeta">Tarjeta</option>
+                  <option value="cheque">Cheque</option>
                 </select>
                 <p className="mt-1 text-[11px] text-slate-500">Cómo se hizo el pago.</p>
               </div>

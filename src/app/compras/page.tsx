@@ -40,6 +40,7 @@ const metodoPagoBadge: Record<string, { label: string; className: string }> = {
   efectivo: { label: "Efectivo", className: "bg-emerald-50 text-emerald-700" },
   transferencia: { label: "Transferencia", className: "bg-indigo-50 text-indigo-700" },
   tarjeta: { label: "Tarjeta", className: "bg-amber-50 text-amber-800" },
+  cheque: { label: "Cheque", className: "bg-sky-50 text-sky-700" },
 };
 
 function formatFechaDate(fecha: string | null | undefined): string {

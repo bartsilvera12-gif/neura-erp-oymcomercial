@@ -62,7 +62,10 @@ export async function POST(request: NextRequest) {
         : null;
     const metodoPagoRaw = body.metodo_pago;
     const metodoPago =
-      metodoPagoRaw === "efectivo" || metodoPagoRaw === "transferencia" || metodoPagoRaw === "tarjeta"
+      metodoPagoRaw === "efectivo" ||
+      metodoPagoRaw === "transferencia" ||
+      metodoPagoRaw === "tarjeta" ||
+      metodoPagoRaw === "cheque"
         ? metodoPagoRaw
         : null;
 
