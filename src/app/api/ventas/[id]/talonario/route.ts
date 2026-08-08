@@ -218,6 +218,13 @@ function renderTalonario(venta: VentaRow, items: ItemRow[]): string {
       <button id="calReset">Reset</button>
       <button id="calPrint">Imprimir</button>
     </div>
+    <div style="margin-top:6px; color:#fbbf24; font-size:10px; line-height:1.35">
+      <b style="color:#fbbf24">Antes de imprimir la 1ª vez:</b><br/>
+      En el diálogo de impresión → <b>Más opciones</b><br/>
+      · Márgenes: <b>Ninguno</b><br/>
+      · Escala: <b>100 / Personalizada</b><br/>
+      · <b>Desactivar</b> "Encabezados y pies de página"
+    </div>
   </div>
 
   <div class="sheet" id="sheet">
@@ -270,15 +277,25 @@ function renderTalonario(venta: VentaRow, items: ItemRow[]): string {
     else if (e.key === "ArrowUp")    { nudge(0, -step); e.preventDefault(); }
     else if (e.key === "ArrowDown")  { nudge(0, step);  e.preventDefault(); }
     else if (e.key === "r" || e.key === "R") { x = 0; y = 0; apply(); e.preventDefault(); }
-    else if (e.key === "p" || e.key === "P") { window.print(); e.preventDefault(); }
+    else if (e.key === "p" || e.key === "P") { doPrint(); e.preventDefault(); }
   });
+  // Al imprimir, blanqueamos temporalmente el title para que el navegador
+  // no lo pinte en el encabezado por defecto ("Talonario · VTA-..."). Se
+  // restaura después de la impresión para no romper la pestaña.
+  function doPrint(){
+    var prevTitle = document.title;
+    document.title = " ";
+    try { window.print(); } finally {
+      setTimeout(function(){ document.title = prevTitle; }, 100);
+    }
+  }
   document.getElementById("calInc").onclick = function(){ nudge(0, 1); };
   document.getElementById("calDec").onclick = function(){ nudge(0, -1); };
   document.getElementById("calReset").onclick = function(){ x=0; y=0; apply(); };
-  document.getElementById("calPrint").onclick = function(){ window.print(); };
+  document.getElementById("calPrint").onclick = doPrint;
   apply();
   try {
-    if (new URL(location.href).searchParams.get("auto") === "1") setTimeout(function(){ window.print(); }, 300);
+    if (new URL(location.href).searchParams.get("auto") === "1") setTimeout(doPrint, 300);
   } catch(e){}
 })();
 </script>
