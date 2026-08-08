@@ -47,12 +47,19 @@ type VentaRow = {
   nota_remision_numero: string | null;
 };
 
-// ── Layout (mm desde el borde superior-izquierdo del papel 21×19cm) ─────
-// Todas las coordenadas se ajustaron desde una foto plana del talonario
-// vacío (Comercial O&M). Si en la impresión real algo cae 2-3mm corrido,
-// usar ?dx=N&dy=N para ajustar globalmente en mm.
-const PAGE_W_MM = 210;
-const PAGE_H_MM = 190;
+// ── Layout (mm desde el borde superior-izquierdo del papel) ────────────
+// El driver de la Epson LX-350 en serveroym está configurado con papel
+// tamaño CARTA (216×279mm portrait) — así lo dejó el facturador viejo que
+// venían usando. Chrome PDF viewer imprime "Tamaño real" solo si el PDF
+// coincide con el papel del driver; si no coincide, rota/escala/centra
+// y descoloca todo. Por eso el PDF también es Carta portrait: el layout
+// del talonario ocupa los primeros 190mm de altura y 210mm de ancho
+// (arriba a la izquierda), que es donde cae el papel físico del talonario
+// cuando se carga alineado al margen superior-izquierdo. La Epson
+// imprime esos 190mm y avanza el resto en vacío (comportamiento normal
+// con carta + hoja suelta más corta).
+const PAGE_W_MM = 216;  // Carta portrait: ancho
+const PAGE_H_MM = 279;  // Carta portrait: alto (el talonario ocupa solo los primeros 190mm)
 
 // Fecha "San Lorenzo, DD  MM  del 20 YY"
 const FECHA_Y = 47;
